@@ -69,7 +69,7 @@ const S = {
   venue:"", postcode:"", name:"", email:"", phone:"", notes:"",
   mine:[], mineLoaded:false, ops:[], opsLoaded:false, opsFilter:"all", opsView:"events", showErr:false, busy:false,
   trailer:{live:false, now_id:null, stops:[]},
-  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"book", acctOpen:false, finishBooking:false
+  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"book", acctOpen:false, finishBooking:false, team:null, teamConfirm:null
 };
 // first bookable month
 (function(){ const d = addDays(MIN_NOTICE); S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1); })();
@@ -96,6 +96,12 @@ const ICONS = {
 };
 const ico = n => '<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" style="color:var(--ink)">'+ICONS[n]+'</svg>';
 const cupSvg = (fill) => '<svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M6 11h14l-2.4 12H8.4z" fill="var(--berry)"/><path d="M7 11c0-'+(2+fill)+' 2.5-'+(4+fill)+' 6-'+(4+fill)+'s6 '+(2)+' 6 '+(4+fill)+'z" fill="var(--mint)"/></svg>';
+
+// ================= Roles =================
+const ROLE_RANK = {customer:0, operator:1, store_admin:2, admin:3};
+const ROLE_NAME = {customer:"Customer", operator:"Operator", store_admin:"Store admin", admin:"Administrator"};
+function myRank(){ return S.user ? (ROLE_RANK[S.user.role]||0) : 0; }
+function isManager(){ return myRank() >= 2; }   // store admin or administrator
 
 // ================= Neon (sign-in + database) =================
 // Only these two addresses are allowed by the page's security policy.
@@ -176,11 +182,11 @@ function render(){
   const v = $("#view");
   if (S.tab==="mine" && S.user && !S.mineLoaded) loadMine();
   if (S.tab==="ops" && S.user && S.user.staff && !S.opsLoaded) loadOps();
-  if (S.tab==="rewards" && S.user && !S.user.staff && !CARD) loadCard();
+  if (S.tab==="rewards" && S.user && !CARD) loadCard();
   if (S.tab==="book") v.innerHTML = renderBook();
   else if (S.tab==="mine") v.innerHTML = renderMine();
   else if (S.tab==="find") v.innerHTML = renderFind();
-  else if (S.tab==="rewards") v.innerHTML = (S.user && !S.user.staff) ? renderRewards() : renderRewardsLocked();
+  else if (S.tab==="rewards") v.innerHTML = S.user ? renderRewards() : renderRewardsLocked();
   else v.innerHTML = (S.user && S.user.staff) ? renderOps() : renderStaffLocked();
   v.firstElementChild && v.firstElementChild.classList.add("fade");
   drawQR(); R.newStamps=[]; R.flash=false;
@@ -308,7 +314,7 @@ function bkCard(b, ops){
   const pkgName = (PACKAGES.find(p=>p.id===b.pkg)||{}).name||"";
   return '<article class="bk"><div class="date"><small>'+MON3[d.getMonth()]+'</small><b>'+d.getDate()+'</b><small>'+DOW[(d.getDay()+6)%7]+'</small></div><div><h3>'+esc(b.name)+' · '+evName(b.event)+'</h3><div class="meta">'+esc(b.time)+' · '+b.guests+' guests · '+esc(pkgName)+' · '+esc(String(b.postcode).toUpperCase())+'</div>'
     + (ops ? '<div class="meta">'+esc(b.venue)+(b.phone?' · '+esc(b.phone):'')+(b.notes?'<br>Notes: '+esc(b.notes):'')+'</div>' : '')
-    + '<div class="foot"><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="status '+(ST_CLASS[b.status]||"")+'">'+(ST_LABEL[b.status]||esc(b.status))+'</span><span class="van">'+esc(b.ref)+' · '+unitName(b.unit)+'</span></span>'+(ops&&next?'<button class="btn ghost small" data-act="adv" data-ref="'+esc(b.ref)+'">'+next+'</button>':'<span class="mono" style="font-size:13px">'+gbp(b.total)+'</span>')+'</div></div></article>';
+    + '<div class="foot"><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="status '+(ST_CLASS[b.status]||"")+'">'+(ST_LABEL[b.status]||esc(b.status))+'</span><span class="van">'+esc(b.ref)+' · '+unitName(b.unit)+'</span></span>'+(ops&&next&&isManager()?'<button class="btn ghost small" data-act="adv" data-ref="'+esc(b.ref)+'">'+next+'</button>':'<span class="mono" style="font-size:13px">'+gbp(b.total)+'</span>')+'</div></div></article>';
 }
 async function loadMine(){
   S.mineLoaded = true;
@@ -382,8 +388,10 @@ async function loadOps(){
   if (S.tab==="ops") render();
 }
 function renderOps(){
-  const seg = '<div class="seg" role="group" aria-label="Operator views"><button data-act="opsview" data-v="events" aria-pressed="'+(S.opsView==="events")+'">Events</button><button data-act="opsview" data-v="till" aria-pressed="'+(S.opsView==="till")+'">Stamp till</button></div>';
+  if (S.opsView==="team" && !isManager()) S.opsView = "events";
+  const seg = '<div class="seg" role="group" aria-label="Operator views"><button data-act="opsview" data-v="events" aria-pressed="'+(S.opsView==="events")+'">Events</button><button data-act="opsview" data-v="till" aria-pressed="'+(S.opsView==="till")+'">Stamp till</button>'+(isManager()?'<button data-act="opsview" data-v="team" aria-pressed="'+(S.opsView==="team")+'">Team</button>':'')+'</div>';
   if (S.opsView==="till") return '<section>'+seg+renderTill()+'</section>';
+  if (S.opsView==="team") return '<section>'+seg+renderTeam()+'</section>';
   const list = S.ops.slice().sort((a,b)=>a.date-b.date);
   const f = S.opsFilter;
   const shown = list.filter(b=>f==="all"||b.status===f);
@@ -392,12 +400,12 @@ function renderOps(){
   const T = S.trailer, today = T.stops.filter(t=>t.day===0 && !t.private);
   let h = '<section>'+seg+'<div class="step-head"><h2>Upcoming events</h2><span class="eyebrow">Operator view</span></div>';
   h += '<div class="stats"><div class="stat"><small>Events</small><b class="mono">'+list.length+'</b></div><div class="stat"><small>Pipeline</small><b class="mono">'+gbp(pipeline)+'</b></div><div class="stat"><small>Deposits in</small><b class="mono">'+gbp(deposits)+'</b></div></div>';
-  h += '<div class="panel"><div class="switch"><label for="liveToggle"><strong>Share trailer location</strong><br><small class="muted">'+(T.live?"Customers see where you’re serving now":"Customers see your next stop only")+'</small></label><input type="checkbox" id="liveToggle" '+(T.live?"checked":"")+'></div>'
+  if (isManager()) h += '<div class="panel"><div class="switch"><label for="liveToggle"><strong>Share trailer location</strong><br><small class="muted">'+(T.live?"Customers see where you’re serving now":"Customers see your next stop only")+'</small></label><input type="checkbox" id="liveToggle" '+(T.live?"checked":"")+'></div>'
     + (today.length ? '<div class="eyebrow" style="margin:12px 0 6px">Serving today at</div><div class="chips">'+today.map(t=>'<button class="chip" data-act="stop" data-i="'+t.id+'" aria-pressed="'+(T.live&&T.now_id===t.id)+'">'+esc(t.from)+' '+esc(t.place)+'</button>').join("")+'</div>' : '<p class="hint" style="margin:10px 0 0">No public stops today.</p>')
     + '</div>';
   h += '<div class="chips" style="margin-bottom:12px">'+[["all","All"],["pending_deposit","Deposit due"],["deposit_paid","Deposit paid"],["confirmed","Confirmed"]].map(x=>'<button class="chip" data-act="filter" data-f="'+x[0]+'" aria-pressed="'+(f===x[0])+'">'+x[1]+'</button>').join("")+'</div>';
   h += !S.opsLoaded ? '<div class="panel empty">Loading bookings…</div>' : shown.length ? shown.map(b=>bkCard(b,true)).join("") : '<div class="panel empty">Nothing with this status.</div>';
-  h += '<p class="note">Marking a deposit as paid adds '+BOOKING_BONUS+' bonus stamps to the customer’s card. Only do it once the money has arrived.</p></section>';
+  h += isManager() ? '<p class="note">Marking a deposit as paid adds '+BOOKING_BONUS+' bonus stamps to the customer’s card. Only do it once the money has arrived.</p></section>' : '<p class="note">Store admins and administrators mark deposits as paid and share the trailer’s location.</p></section>';
   return h;
 }
 
@@ -447,7 +455,10 @@ document.addEventListener("click", e=>{
   }
   if (a==="restart"){ Object.assign(S,{finishBooking:false,step:0,event:null,unit:null,date:null,time:null,pkg:null,pkgTouched:false,extraHours:0,addons:new Set(),venue:"",notes:""}); }
   if (a==="filter"){ S.opsFilter=t.dataset.f; }
-  if (a==="opsview"){ S.opsView=t.dataset.v; }
+  if (a==="opsview"){ S.opsView=t.dataset.v; if (S.opsView==="team") loadTeam(); }
+  if (a==="team-remove"){ S.teamConfirm = t.dataset.email; render(); return; }
+  if (a==="team-remove-cancel"){ S.teamConfirm = null; render(); return; }
+  if (a==="team-remove-yes"){ setRole(t.dataset.email, "customer"); return; }
   if (a==="rw-copy-unused"){ const txt=$("#refcode").textContent; try{ navigator.clipboard.writeText(txt).then(()=>toast("Code copied"),selectCode); }catch(err){ selectCode(); } return; }
   if (a==="rw-bday"){ saveBirthday(); return; }
   if (a==="rw-find"){ tillFind(); return; }
@@ -461,6 +472,7 @@ document.addEventListener("keydown", e=>{ if(e.key==="Enter" && e.target.id==="l
 document.addEventListener("change", e=>{
   const t=e.target;
   if (t.id==="liveToggle"){ setLive(t.checked, null); return; }
+  if (t.dataset.act==="team-role"){ setRole(t.dataset.email, t.value); return; }
   if (t.dataset.act==="addon"){ t.checked?S.addons.add(t.dataset.id):S.addons.delete(t.dataset.id); renderBar(); }
   if (t.id==="guests"){ const y=window.scrollY; render(); window.scrollTo(0,y); }
 });
@@ -615,6 +627,45 @@ function renderRewards(){
   return h;
 }
 
+async function loadTeam(){
+  try { S.team = await Neon.rpc("admin_team", {}, true); } catch(e){ toast(e.message); }
+  if (S.tab==="ops" && S.opsView==="team") render();
+}
+async function setRole(email, role){
+  try { S.team = await Neon.rpc("admin_set_role", {p_email: email, p_role: role}, true);
+        toast(role==="customer" ? email+" removed from the team" : email+" is now "+ROLE_NAME[role].toLowerCase()); }
+  catch(e){ toast(e.message); }
+  S.teamConfirm = null; render();
+}
+function roleOptions(current, mgrRole){
+  const allowed = mgrRole==="admin" ? ["operator","store_admin","admin"] : ["operator"];
+  return allowed.map(r=>'<option value="'+r+'"'+(r===current?' selected':'')+'>'+ROLE_NAME[r]+'</option>').join("");
+}
+function renderTeam(){
+  const T = S.team;
+  if (!T) return '<div class="panel empty">Loading the team…</div>';
+  const mine = T.my_role;
+  const row = (p, invite) => {
+    const label = esc(p.name || p.email);
+    let right;
+    if (p.me) right = '<span class="status st-confirmed">'+ROLE_NAME[p.role]+' · You</span>';
+    else if (!p.editable) right = '<span class="status st-deposit">'+ROLE_NAME[p.role]+'</span>';
+    else if (S.teamConfirm===p.email) right = '<span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" data-act="team-remove-yes" data-email="'+esc(p.email)+'">'+(invite?"Cancel invite":"Remove")+'</button><button class="btn ghost small" data-act="team-remove-cancel">Keep</button></span>';
+    else right = '<span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select data-act="team-role" data-email="'+esc(p.email)+'" aria-label="Role for '+esc(p.email)+'" style="padding:7px 8px;border-radius:10px;border:1.5px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-size:13px">'+roleOptions(p.role, mine)+'</select><button class="btn ghost small" data-act="team-remove" data-email="'+esc(p.email)+'">'+(invite?"Cancel":"Remove")+'</button></span>';
+    return '<li class="stop" style="grid-template-columns:1fr auto"><span><strong>'+label+'</strong><small>'+esc(p.email)+(p.note?' · '+esc(p.note):'')+(invite?' · invited, not signed in yet':'')+'</small></span>'+right+'</li>';
+  };
+  let h = '<div class="step-head"><h2>Team</h2><span class="eyebrow">You’re '+(ROLE_NAME[mine]||"").toLowerCase()+'</span></div>';
+  h += '<div class="panel"><div class="eyebrow">Staff</div><ul class="stops">'+(T.members.length ? T.members.map(p=>row(p,false)).join("") : '<li class="muted" style="padding:10px 0">No staff yet.</li>')+'</ul></div>';
+  if (T.invites.length) h += '<div class="panel"><div class="eyebrow">Invited</div><ul class="stops">'+T.invites.map(p=>row(p,true)).join("")+'</ul></div>';
+  h += '<div class="panel"><div class="eyebrow" style="margin-bottom:8px">Add someone</div><form data-form="invite" novalidate><div class="field"><label for="inv-email">Their email</label><input id="inv-email" type="email" maxlength="254" autocomplete="off" placeholder="name@example.com"></div>'
+     + '<div class="row"><div class="field"><label for="inv-role">Role</label><select id="inv-role" style="background:var(--surface);color:var(--ink);border:2px solid var(--line);border-radius:14px;padding:11px 13px;font:inherit">'+roleOptions("operator", mine)+'</select></div>'
+     + '<div class="field"><label for="inv-note">Note (optional)</label><input id="inv-note" maxlength="80" placeholder="e.g. Saturday trailer"></div></div>'
+     + '<button class="btn" type="submit">Add to team</button></form><p class="hint" style="margin:10px 0 0">If they already have an account they get the role straight away. Otherwise it’s waiting for them the first time they sign in with that email.</p></div>';
+  h += '<div class="panel"><div class="eyebrow" style="margin-bottom:6px">What each role can do</div><dl class="kv"><dt>Customer</dt><dd>Book, see their bookings and stamp card.</dd><dt>Operator</dt><dd>Plus: bookings list and stamp till.</dd><dt>Store admin</dt><dd>Plus: mark deposits paid, share the trailer’s location, add and remove operators.</dd><dt>Administrator</dt><dd>Plus: make store admins and administrators.</dd></dl></div>';
+  h += '<p class="note">Nobody can change their own role. Removing someone makes them a customer again; their bookings and stamps are kept.</p>';
+  return h;
+}
+
 function renderTill(){
   if (!R.stats) loadStats();
   const m = R.found;
@@ -653,15 +704,15 @@ async function afterSignIn(){
   const sess = await Neon.session();
   if (!sess || !sess.user){ S.user=null; return false; }
   const u = sess.user;
-  S.user = {id:u.id, email:u.email, name: (u.name && u.name.trim()) || nameFromEmail(u.email), staff:false};
-  try { const c = await Neon.rpc("my_card", {}, true); S.user.staff = !!c.staff; if (!S.user.staff) CARD = c; } catch(e){}
+  S.user = {id:u.id, email:u.email, name: (u.name && u.name.trim()) || nameFromEmail(u.email), staff:false, role:"customer"};
+  try { const c = await Neon.rpc("my_card", {}, true); S.user.staff = !!c.staff; S.user.role = c.role || "customer"; CARD = c; } catch(e){}
   if (!S.name) S.name = S.user.name; if (!S.email) S.email = S.user.email;
   S.mineLoaded=false; S.opsLoaded=false;
   return true;
 }
 async function signOut(){
   await Neon.signOut();
-  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup="";
+  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup=""; S.team=null; S.teamConfirm=null;
   S.acctOpen=false; toast("Signed out"); render();
 }
 async function sendCode(email, isResend){
@@ -683,8 +734,8 @@ function renderAcct(){
   if (!S.user){ b.className="acct"; b.textContent="Sign in"; b.setAttribute("aria-label","Sign in"); m.hidden=true; return; }
   b.className="acct on"; b.textContent=S.user.name.charAt(0).toUpperCase(); b.setAttribute("aria-label","Account: "+S.user.name); b.setAttribute("aria-expanded", S.acctOpen);
   m.hidden=!S.acctOpen;
-  if (S.acctOpen) m.innerHTML = '<div class="who"><b>'+esc(S.user.name)+(S.user.staff?' · Staff':'')+'</b><small>'+esc(S.user.email)+'</small>'+(S.user.staff||!CARD?'':'<small style="display:block" class="mono">Member '+esc(CARD.member_no)+'</small>')+'</div>'
-    + (S.user.staff ? '<button class="btn ghost small" data-act="goto" data-tab="ops">Operator</button>' : '<button class="btn ghost small" data-act="goto" data-tab="rewards">My stamp card</button><button class="btn ghost small" data-act="goto" data-tab="mine">My bookings</button>')
+  if (S.acctOpen) m.innerHTML = '<div class="who"><b>'+esc(S.user.name)+(S.user.staff?' · '+ROLE_NAME[S.user.role]:'')+'</b><small>'+esc(S.user.email)+'</small>'+(!CARD?'':'<small style="display:block" class="mono">Member '+esc(CARD.member_no)+'</small>')+'</div>'
+    + (S.user.staff ? '<button class="btn ghost small" data-act="goto" data-tab="ops">Operator</button>' : '') + ('<button class="btn ghost small" data-act="goto" data-tab="rewards">My stamp card</button><button class="btn ghost small" data-act="goto" data-tab="mine">My bookings</button>')
     + '<button class="btn small" data-act="signout">Sign out</button>';
 }
 function renderSignin(){
@@ -708,7 +759,6 @@ function renderSignin(){
 }
 function renderRewardsLocked(){
   let st=""; for(let i=1;i<=GOAL;i++) st+='<div class="stamp'+(i===GOAL?" free":"")+'" aria-hidden="true">'+(i===GOAL?"Free":i)+'</div>';
-  if (S.user && S.user.staff) return '<section><div class="panel empty"><h2 style="font-size:24px;margin-bottom:6px">You’re signed in as staff</h2><p>Stamp customers’ cards from the Stamp till in the Operator tab.</p><button class="btn" data-act="goto" data-tab="ops">Open Operator</button></div></section>';
   return '<section><div class="step-head"><h2>Rewards</h2><span class="eyebrow">Buy 9, the 10th is free</span></div><div class="lcard lock-card"><div class="eyebrow" style="color:rgba(255,255,255,.75)">Froyo stamp card</div><h2 style="font-size:26px">Collect a stamp on every cup</h2><div class="stamps" style="width:100%">'+st+'</div><p style="margin:4px 0 6px;opacity:.9">Plus a birthday treat, bonus stamps when you book an event, and double stamps on Tuesdays.</p><button class="btn big" data-act="signin">Sign in to start collecting</button></div></section>';
 }
 function renderStaffLocked(){
@@ -718,6 +768,13 @@ document.addEventListener("submit", async e=>{
   const f=e.target.dataset.form; if(!f) return; e.preventDefault();
   if (S.auth.busy) return;
   const okEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) && v.length <= 254;
+  if (f==="invite"){
+    const em=$("#inv-email").value.trim().toLowerCase(), role=$("#inv-role").value, note=$("#inv-note").value.trim();
+    if(!okEmail(em)){ toast("Enter a valid email address"); $("#inv-email").focus(); return; }
+    try { S.team = await Neon.rpc("admin_invite", {p_email:em, p_role:role, p_note:note}, true); toast(em+" is now "+(ROLE_NAME[role]||role).toLowerCase()); }
+    catch(err){ toast(err.message); }
+    render(); return;
+  }
   if (f==="email"){
     const v=$("#si-email").value.trim().toLowerCase(); S.auth.email=v;
     if(!okEmail(v)){ S.auth.err="Enter an email address like name@example.com."; render(); $("#si-email").focus(); return; }

@@ -6,7 +6,7 @@ The Froyo on the go web app for customers and staff, live at https://app.froyoon
 - **Find us**: where the trailer is serving now and this week's public stops.
 - **Rewards**: a digital stamp card (buy 9, the 10th is free) with the customer's own QR code.
 - **Bookings**: a customer's own bookings.
-- **Operator** (staff only): bookings, deposits, trailer location sharing and the stamp till.
+- **Operator** (staff only): bookings, deposits, trailer location sharing, the stamp till and team roles.
 
 ## How it works
 
@@ -20,15 +20,20 @@ The website talks to Neon through the Neon Data API. It can only call the action
 
 There's no build step and there are no packages. The database set-up is in `db/` for reference.
 
-## Making someone staff
+## Roles
 
-In the Neon console, open the **SQL Editor** for the Froyo project and run:
+| | Customer | Operator | Store admin | Administrator |
+| --- | --- | --- | --- | --- |
+| Book, own bookings, own stamp card | ✓ | ✓ | ✓ | ✓ |
+| Operator tab: bookings list, stamp till | | ✓ | ✓ | ✓ |
+| Mark deposits paid, confirm bookings | | | ✓ | ✓ |
+| Share the trailer's location | | | ✓ | ✓ |
+| Add and remove operators | | | ✓ | ✓ |
+| Make store admins and administrators | | | | ✓ |
 
-```sql
-INSERT INTO app.staff_invites (email, note) VALUES ('name@example.com', 'Name, role');
-```
+Everyone who signs in is a customer. To change someone's role, a store admin or administrator opens **Operator → Team** in the app: pick a role from the menu next to their name, or add a new person by email. If they haven't signed in yet, the role waits for them until they sign in with that email. Nobody can change their own role.
 
-The next time they sign in with a code sent to that email, they become staff and see the Operator tab. To remove someone's staff access, see the bottom of `db/03_grants.sql`.
+The rules are enforced by the database (`db/05_roles.sql`, `db/06_store_admin.sql`), not just hidden in the app.
 
 ## Not built yet
 
