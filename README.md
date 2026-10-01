@@ -22,10 +22,13 @@ There's no build step and there are no packages. The database set-up is in `db/`
 
 ## Making someone staff
 
-Staff sign in the same way as customers, with a code sent to their work email. To give someone staff access:
+In the Neon console, open the **SQL Editor** for the Froyo project and run:
 
-1. They sign in once with their work email, so their account exists.
-2. In the Neon console, open the **SQL Editor** for the Froyo project and run the `INSERT INTO app.staff` statement at the bottom of `db/03_grants.sql` with their email.
+```sql
+INSERT INTO app.staff_invites (email, note) VALUES ('name@example.com', 'Name, role');
+```
+
+The next time they sign in with a code sent to that email, they become staff and see the Operator tab. To remove someone's staff access, see the bottom of `db/03_grants.sql`.
 
 ## Not built yet
 

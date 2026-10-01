@@ -122,6 +122,7 @@ CREATE OR REPLACE FUNCTION api.my_card() RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $$
 DECLARE u text := app.uid();
 BEGIN
+  PERFORM app.claim_staff_invite(u);   -- defined in 04_staff_invites.sql
   PERFORM app.ensure_member(u);
   RETURN app.card_json(u) || jsonb_build_object('staff', EXISTS (SELECT 1 FROM app.staff WHERE user_id = u));
 END $$;
