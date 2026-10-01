@@ -36,45 +36,40 @@ const UNITS = [
 ];
 const unitName = id => (UNITS.find(u=>u.id===id)||{}).name || "—";
 
-// Public trailer schedule (example data). In the live app the operator sets this and the trailer's GPS updates the pin.
 function mapsUrl(q){ return "https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(q); }
-const TRAILER = [
-  {day:0, from:"11:00", to:"14:00", place:"Riverside Park", area:"by the boathouse", pc:"GU1 1AA", x:118, y:92},
-  {day:0, from:"15:00", to:"18:00", place:"Market Square", area:"Saturday food market", pc:"GU1 3AJ", x:250, y:150},
-  {day:1, from:"12:00", to:"17:00", place:"Private event", private:true},
-  {day:3, from:"15:15", to:"17:30", place:"Northgate Primary", area:"after-school pop-up, by the main gate", pc:"SE22 8QF"},
-  {day:5, from:"12:00", to:"14:00", place:"Station Approach", area:"lunchtime pop-up", pc:"GU1 4UT"},
-  {day:6, from:"10:00", to:"16:00", place:"Village Green Fête", area:"stall 14, near the bandstand", pc:"GU5 0QF"}
-];
-
-// deterministic sample availability
-function hash(n){ n = ((n>>16)^n)*0x45d9f3b; n = ((n>>16)^n)*0x45d9f3b; return ((n>>16)^n)>>>0; }
 function key(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function parseDay(iso){ const [y,m,d]=String(iso).slice(0,10).split("-").map(Number); return new Date(y,m-1,d); }
+
+// Availability comes from the database: which start times are already taken, per setup and month.
+const AV = {};
+function avKey(unit, d){ return unit+"|"+d.getFullYear()+"-"+(d.getMonth()+1); }
+function loadAvail(unit, d){
+  const k = avKey(unit, d); if (AV[k]) return; AV[k] = "loading";
+  Neon.rpc("get_availability", {p_unit: unit, p_month: key(new Date(d.getFullYear(), d.getMonth(), 1))})
+    .then(r=>{ AV[k] = r || {}; if (S.tab==="book" && (S.step===1)) render(); })
+    .catch(()=>{ delete AV[k]; });
+}
 function dayInfo(d, unit){
   const diff = (d - TODAY)/864e5;
-  if (diff < MIN_NOTICE) return {st:"past"};
-  const h = hash(d.getFullYear()*500 + d.getMonth()*40 + d.getDate() + (unit==="trailer"?7919:0)) % 10;
-  const wknd = d.getDay()===0 || d.getDay()===6;
-  if (h < (wknd?3:1)) return {st:"full"};
-  if (h < (wknd?6:3)) return {st:"limited", taken:[SLOTS[h%4], SLOTS[(h+2)%4]]};
+  if (diff < MIN_NOTICE) return {st:"past", taken:[]};
+  if (!unit) return {st:"open", taken:[]};
+  const m = AV[avKey(unit, d)];
+  if (!m || m==="loading"){ loadAvail(unit, d); return {st:"open", taken:[], loading:true}; }
+  const taken = m[key(d)] || [];
+  if (taken.length >= SLOTS.length) return {st:"full", taken};
+  if (taken.length) return {st:"limited", taken};
   return {st:"open", taken:[]};
 }
 
 function addDays(n){ const d=new Date(TODAY); d.setDate(d.getDate()+n); return d; }
-const SAMPLE = [
-  {ref:"FR-4K2P", name:"Priya & Tom", event:"wedding", unit:"trailer", date:addDays(13), time:"18:00", guests:110, pkg:"party", total:1060, status:"deposit", postcode:"GU1 3AA", sample:true},
-  {ref:"FR-9D3M", name:"Northgate Primary PTA", event:"school", unit:"trailer", date:addDays(20), time:"13:00", guests:220, pkg:"festival", total:1480, status:"confirmed", postcode:"SE22 8QF", sample:true},
-  {ref:"FR-2H7X", name:"Lumen Studios", event:"corporate", unit:"cart", date:addDays(27), time:"15:00", guests:75, pkg:"party", total:808, status:"enquiry", postcode:"EC2A 4NE", sample:true},
-  {ref:"FR-6R1B", name:"Maya's 7th", event:"birthday", unit:"cart", date:addDays(34), time:"11:00", guests:35, pkg:"popup", total:447, status:"confirmed", postcode:"KT2 6PT", sample:true}
-];
-
 const S = {
   tab:"book", step:0,
-  event:null, unit:null, live:true, liveStop:1, notify:false, date:null, time:null, calMonth:new Date(TODAY.getFullYear(), TODAY.getMonth(), 1),
+  event:null, unit:null, date:null, time:null, calMonth:new Date(TODAY.getFullYear(), TODAY.getMonth(), 1),
   guests:80, pkg:null, pkgTouched:false, extraHours:0, addons:new Set(),
   venue:"", postcode:"", name:"", email:"", phone:"", notes:"",
-  mine:[], ops:SAMPLE.slice(), opsFilter:"all", opsView:"events", showErr:false,
-  view:"signin", user:null, auth:{screen:"welcome", email:"", err:""}, returnTab:"book", pendingBonus:null, acctOpen:false
+  mine:[], mineLoaded:false, ops:[], opsLoaded:false, opsFilter:"all", opsView:"events", showErr:false, busy:false,
+  trailer:{live:false, now_id:null, stops:[]},
+  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"book", acctOpen:false, finishBooking:false
 };
 // first bookable month
 (function(){ const d = addDays(MIN_NOTICE); S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1); })();
@@ -102,12 +97,77 @@ const ICONS = {
 const ico = n => '<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" style="color:var(--ink)">'+ICONS[n]+'</svg>';
 const cupSvg = (fill) => '<svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><path d="M6 11h14l-2.4 12H8.4z" fill="var(--berry)"/><path d="M7 11c0-'+(2+fill)+' 2.5-'+(4+fill)+' 6-'+(4+fill)+'s6 '+(2)+' 6 '+(4+fill)+'z" fill="var(--mint)"/></svg>';
 
+// ================= Neon (sign-in + database) =================
+// Only these two addresses are allowed by the page's security policy.
+const CFG = {
+  auth: "https://ep-red-paper-za2pjniz.neonauth.c-2.eu-west-2.aws.neon.tech/neondb/auth",
+  api:  "https://ep-red-paper-za2pjniz.apirest.c-2.eu-west-2.aws.neon.tech/neondb/rest/v1"
+};
+function friendlyAuth(j, status){
+  const code = j && j.code || "";
+  if (status===429 || code==="TOO_MANY_ATTEMPTS" || code==="TOO_MANY_REQUESTS") return "Too many attempts. Please wait a few minutes and try again.";
+  if (code==="INVALID_OTP" || code==="OTP_EXPIRED") return "That code didn’t work or has expired. Check the email or ask for a new code.";
+  if (code==="INVALID_EMAIL_OR_PASSWORD" || code==="INVALID_EMAIL" || code==="INVALID_PASSWORD" || status===401) return "Email or password not recognised.";
+  return "Something went wrong. Please try again.";
+}
+const Neon = (function(){
+  // The sign-in session lives in a secure cookie the page can't read.
+  // The short-lived database pass (JWT) is kept in memory only, never saved to the device.
+  let jwt=null, jwtExp=0, anon=null, anonExp=0;
+  function expOf(t){ try{ return JSON.parse(atob(t.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"))).exp*1000; }catch(e){ return 0; } }
+  async function authCall(path, body){
+    const r = await fetch(CFG.auth+path, {method: body?"POST":"GET", credentials:"include", cache:"no-store",
+      headers: body?{"content-type":"application/json"}:{}, body: body?JSON.stringify(body):undefined});
+    const j = await r.json().catch(()=>null);
+    if (!r.ok){ const e=new Error(friendlyAuth(j, r.status)); e.status=r.status; throw e; }
+    return j;
+  }
+  async function token(){
+    if (jwt && Date.now() < jwtExp-30000) return jwt;
+    const r = await fetch(CFG.auth+"/token", {credentials:"include", cache:"no-store"});
+    if (!r.ok){ jwt=null; return null; }
+    const j = await r.json().catch(()=>null);
+    if (!j || !j.token) return null;
+    jwt = j.token; jwtExp = expOf(jwt); return jwt;
+  }
+  async function anonToken(){
+    if (anon && Date.now() < anonExp-30000) return anon;
+    const r = await fetch(CFG.auth+"/token/anonymous", {credentials:"omit", cache:"no-store"});
+    const j = await r.json(); anon = j.token; anonExp = expOf(anon); return anon;
+  }
+  async function rpc(fn, args, needUser){
+    let t = S.user ? await token() : null;
+    if (!t){
+      if (needUser){ const e=new Error("Please sign in again."); e.status=401; throw e; }
+      t = await anonToken();
+    }
+    const r = await fetch(CFG.api+"/rpc/"+fn, {method:"POST", credentials:"omit", cache:"no-store",
+      headers:{"content-type":"application/json", "accept":"application/json", "authorization":"Bearer "+t},
+      body: JSON.stringify(args||{})});
+    const text = await r.text(); let j=null; try{ j = text ? JSON.parse(text) : null; }catch(e){}
+    if (!r.ok){
+      const e = new Error(j && j.message && r.status < 500 && !/^(permission denied|JWT|function )/i.test(j.message) ? j.message : (r.status===401||r.status===403 ? "Please sign in again." : "Something went wrong. Please try again."));
+      e.status = r.status; throw e;
+    }
+    return j;
+  }
+  return {
+    session: ()=>authCall("/get-session").catch(()=>null),
+    sendCode: email=>authCall("/email-otp/send-verification-otp", {email, type:"sign-in"}),
+    verifyCode: (email, otp)=>authCall("/sign-in/email-otp", {email, otp}),
+    passwordSignIn: (email, password)=>authCall("/sign-in/email", {email, password}),
+    signOut: async ()=>{ jwt=null; jwtExp=0; try{ await authCall("/sign-out", {}); }catch(e){} },
+    rpc
+  };
+})();
+
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true,2400); }
 
 // ---------- views ----------
 function render(){
   renderAcct();
   const tabsEl = $("#tabs");
+  if (S.view==="loading"){ tabsEl.hidden=true; $("#bar").hidden=true; $("#view").innerHTML='<section class="signin"><div class="si-hero"><img class="si-logo" src="'+logoSrc()+'" alt=""><p>Loading…</p></div></section>'; return; }
   if (S.view==="signin"){ tabsEl.hidden=true; $("#bar").hidden=true; const v=$("#view"); v.innerHTML=renderSignin(); v.firstElementChild.classList.add("fade"); return; }
   tabsEl.hidden=false;
   const isStaff = !!(S.user && S.user.staff);
@@ -115,6 +175,9 @@ function render(){
   if (S.tab==="ops" && !isStaff) S.tab="book";
   document.querySelectorAll(".tabs button").forEach(b=>b.setAttribute("aria-selected", b.dataset.tab===S.tab));
   const v = $("#view");
+  if (S.tab==="mine" && S.user && !S.mineLoaded) loadMine();
+  if (S.tab==="ops" && S.user && S.user.staff && !S.opsLoaded) loadOps();
+  if (S.tab==="rewards" && S.user && !S.user.staff && !CARD) loadCard();
   if (S.tab==="book") v.innerHTML = renderBook();
   else if (S.tab==="mine") v.innerHTML = renderMine();
   else if (S.tab==="find") v.innerHTML = renderFind();
@@ -188,14 +251,14 @@ function renderBook(){
   }
   if (S.step===4){
     const q = quote(), p = pkgObj();
-    h += '<div class="step-head"><h2>Check & pay deposit</h2><span class="eyebrow">Step 5 of 5</span></div>';
+    h += '<div class="step-head"><h2>Check your booking</h2><span class="eyebrow">Step 5 of 5</span></div>';
     h += '<div class="panel"><dl class="kv"><dt>Event</dt><dd>'+evName(S.event)+'</dd><dt>Setup</dt><dd>'+unitName(S.unit)+'</dd><dt>When</dt><dd>'+fmtDate(S.date,true)+', serving from '+S.time+'</dd><dt>Guests</dt><dd>'+S.guests+'</dd><dt>Where</dt><dd>'+esc(S.venue)+', '+esc(S.postcode.toUpperCase())+'</dd><dt>Contact</dt><dd>'+esc(S.name)+' · '+esc(S.phone)+'</dd></dl></div>';
     h += '<div class="panel">'+q.lines.map(l=>'<div class="sum-row"><span>'+l[0]+'</span><span>'+gbp(l[1])+'</span></div>').join("")
       + '<div class="sum-row"><span>Travel (within 25 miles)</span><span>£0</span></div>'
       + '<div class="sum-row total"><span>Total inc. VAT</span><span>'+gbp(q.total)+'</span></div>'
-      + '<div class="sum-row dep"><span>Deposit due today (25%)</span><span>'+gbp(q.deposit)+'</span></div>'
+      + '<div class="sum-row dep"><span>Deposit (25%)</span><span>'+gbp(q.deposit)+'</span></div>'
       + '<div class="sum-row muted"><span>Balance due 14 days before</span><span>'+gbp(Math.round((q.total-q.deposit)*100)/100)+'</span></div></div>';
-    h += '<p class="note">Free date change up to 30 days before. Deposit is refundable if we can’t attend. In the live app, the button below opens Stripe Checkout with Apple Pay and Google Pay. This prototype skips payment.</p>';
+    h += '<p class="note">Your date is held when you confirm. We then email you a secure link to pay the 25% deposit. Free date change up to 30 days before, and the deposit is refunded if we can’t attend.</p>';
   }
   h += '</section>';
   return h;
@@ -231,23 +294,33 @@ function canNext(){
 function renderConfirm(){
   const b = S.mine[0];
   const bal = new Date(b.date); bal.setDate(bal.getDate()-14);
-  return '<section><div class="ticket"><div class="t-top"><div class="eyebrow" style="color:rgba(255,255,255,.7)">Booking confirmed</div><h2>See you on '+fmtDate(b.date,true)+'</h2></div><div class="t-body"><div class="eyebrow">Booking reference</div><div class="ref">'+b.ref+'</div></div><div class="perf"></div><div class="t-body"><dl class="kv"><dt>Serving</dt><dd>From '+b.time+' · '+b.guests+' guests</dd><dt>Setup</dt><dd>'+unitName(b.unit)+'</dd><dt>Package</dt><dd>'+PACKAGES.find(p=>p.id===b.pkg).name+'</dd><dt>Paid</dt><dd class="mono">'+gbp(b.deposit)+' of '+gbp(b.total)+'</dd></dl></div></div>'
-   + '<button class="bonus" '+(S.pendingBonus?'data-act="signin"':'data-act="goto" data-tab="rewards"')+' style="width:100%;border:0;text-align:left"><span class="pico" style="width:44px;height:44px;border-radius:14px;display:grid;place-items:center;background:transparent;flex:none">'+cupIco()+'</span><span style="flex:1"><b>'+(S.pendingBonus?'Sign in to claim '+BOOKING_BONUS+' bonus stamps':'+'+BOOKING_BONUS+' stamps on your Froyo card')+'</b><small class="muted">'+(S.pendingBonus?'Your stamps are saved for this booking. Signing in adds them to your card':'Thanks for booking. See your card in Rewards')+'</small></span><span aria-hidden="true" style="font-weight:800">›</span></button>'
-   + '<div class="panel"><div class="eyebrow" style="margin-bottom:10px">What happens next</div><ol class="timeline"><li class="done"><i></i><span>Deposit received. Confirmation sent to '+esc(b.email)+'</span></li><li><i></i><span>We call within 2 working days to confirm access and flavours</span></li><li><i></i><span>Balance of '+gbp(Math.round((b.total-b.deposit)*100)/100)+' due '+fmtDate(bal)+'</span></li><li><i></i><span>'+(b.unit==="trailer"?"On the day, track the trailer in Find us and get a text when it’s 15 minutes away":"Our team texts you on the morning with an arrival time")+'</span></li></ol></div></section>';
+  const pkgName = (PACKAGES.find(p=>p.id===b.pkg)||{}).name||"";
+  return '<section><div class="ticket"><div class="t-top"><div class="eyebrow" style="color:rgba(255,255,255,.7)">Booking received</div><h2>Your date is held: '+fmtDate(b.date,true)+'</h2></div><div class="t-body"><div class="eyebrow">Booking reference</div><div class="ref">'+esc(b.ref)+'</div></div><div class="perf"></div><div class="t-body"><dl class="kv"><dt>Serving</dt><dd>From '+esc(b.time)+' · '+b.guests+' guests</dd><dt>Setup</dt><dd>'+unitName(b.unit)+'</dd><dt>Package</dt><dd>'+esc(pkgName)+'</dd><dt>Total</dt><dd class="mono">'+gbp(b.total)+'</dd><dt>Deposit due</dt><dd class="mono">'+gbp(b.deposit)+'</dd></dl></div></div>'
+   + '<div class="bonus"><span class="pico" style="width:44px;height:44px;border-radius:14px;display:grid;place-items:center;flex:none">'+cupIco()+'</span><span style="flex:1"><b>+'+BOOKING_BONUS+' stamps when your deposit is paid</b><small class="muted">They’re added to your Froyo card automatically.</small></span></div>'
+   + '<div class="panel"><div class="eyebrow" style="margin-bottom:10px">What happens next</div><ol class="timeline"><li class="done"><i></i><span>Booking saved. We’ll be in touch at '+esc(b.email)+'</span></li><li><i></i><span>We email you a secure link to pay the '+gbp(b.deposit)+' deposit within 1 working day</span></li><li><i></i><span>Balance of '+gbp(Math.round((b.total-b.deposit)*100)/100)+' due '+fmtDate(bal)+'</span></li><li><i></i><span>'+(b.unit==="trailer"?"On the day, track the trailer in Find us":"Our team texts you on the morning with an arrival time")+'</span></li></ol></div></section>';
 }
 
+const ST_LABEL = {pending_deposit:"Deposit due", deposit_paid:"Deposit paid", confirmed:"Confirmed"};
+const ST_CLASS = {pending_deposit:"st-enquiry", deposit_paid:"st-deposit", confirmed:"st-confirmed"};
+function normB(x){ return Object.assign({}, x, {date: parseDay(x.date), total: x.total/100, deposit: x.deposit/100}); }
 function bkCard(b, ops){
   const d = b.date;
-  const next = {enquiry:"Mark deposit paid", deposit:"Confirm booking"}[b.status];
-  const label = {enquiry:"Enquiry", deposit:"Deposit paid", confirmed:"Confirmed"}[b.status];
-  return '<article class="bk"><div class="date"><small>'+MON3[d.getMonth()]+'</small><b>'+d.getDate()+'</b><small>'+DOW[(d.getDay()+6)%7]+'</small></div><div><h3>'+esc(b.name)+' · '+evName(b.event)+'</h3><div class="meta">'+b.time+' · '+b.guests+' guests · '+PACKAGES.find(p=>p.id===b.pkg).name+' · '+esc(b.postcode.toUpperCase())+'</div><div class="foot"><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="status st-'+b.status+'">'+label+'</span><span class="van">'+b.ref+' · '+unitName(b.unit)+'</span>'+(b.sample?'<span class="sample-tag">Example</span>':'')+'</span>'+(ops&&next?'<button class="btn ghost small" data-act="adv" data-ref="'+b.ref+'">'+next+'</button>':'<span class="mono" style="font-size:13px">'+gbp(b.total)+'</span>')+'</div></div></article>';
+  const next = {pending_deposit:"Mark deposit paid", deposit_paid:"Confirm booking"}[b.status];
+  const pkgName = (PACKAGES.find(p=>p.id===b.pkg)||{}).name||"";
+  return '<article class="bk"><div class="date"><small>'+MON3[d.getMonth()]+'</small><b>'+d.getDate()+'</b><small>'+DOW[(d.getDay()+6)%7]+'</small></div><div><h3>'+esc(b.name)+' · '+evName(b.event)+'</h3><div class="meta">'+esc(b.time)+' · '+b.guests+' guests · '+esc(pkgName)+' · '+esc(String(b.postcode).toUpperCase())+'</div>'
+    + (ops ? '<div class="meta">'+esc(b.venue)+(b.phone?' · '+esc(b.phone):'')+(b.notes?'<br>Notes: '+esc(b.notes):'')+'</div>' : '')
+    + '<div class="foot"><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="status '+(ST_CLASS[b.status]||"")+'">'+(ST_LABEL[b.status]||esc(b.status))+'</span><span class="van">'+esc(b.ref)+' · '+unitName(b.unit)+'</span></span>'+(ops&&next?'<button class="btn ghost small" data-act="adv" data-ref="'+esc(b.ref)+'">'+next+'</button>':'<span class="mono" style="font-size:13px">'+gbp(b.total)+'</span>')+'</div></div></article>';
 }
-
+async function loadMine(){
+  S.mineLoaded = true;
+  try { S.mine = (await Neon.rpc("my_bookings", {}, true)).map(normB); } catch(e){ S.mineLoaded=false; toast(e.message); }
+  if (S.tab==="mine") render();
+}
 function renderMine(){
-  if (!S.user && !S.mine.length) return '<section><div class="panel empty"><h2 style="font-size:24px;margin-bottom:6px">Your bookings</h2><p>Sign in to see your bookings, pay the balance and change dates from any device.</p><div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap"><button class="btn" data-act="signin">Sign in</button><button class="btn ghost" data-act="goto" data-tab="book">Book Froyo</button></div></div></section>';
-  if (!S.user) return '<section><div class="step-head"><h2>My bookings</h2></div>'+S.mine.map(b=>bkCard(b,false)).join("")+'<div class="panel" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span style="flex:1;min-width:180px"><strong>Keep these bookings</strong><br><small class="muted">You booked as a guest. Sign in to save them to your account.</small></span><button class="btn small" data-act="signin">Sign in</button></div></section>';
-  if (!S.mine.length) return '<section><div class="panel empty"><h2 style="font-size:20px;margin-bottom:6px">No bookings yet</h2><p>Bookings you make appear here with the balance due date and arrival details.</p><button class="btn" data-act="goto" data-tab="book">Book Froyo</button></div></section>';
-  return '<section><div class="step-head"><h2>My bookings</h2></div>'+S.mine.map(b=>bkCard(b,false)).join("")+'<p class="note">In the live app, customers sign in with a magic link sent to their email, and can change the date or pay the balance from here.</p></section>';
+  if (!S.user) return '<section><div class="panel empty"><h2 style="font-size:24px;margin-bottom:6px">Your bookings</h2><p>Sign in to see your bookings from any device.</p><div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap"><button class="btn" data-act="signin">Sign in</button><button class="btn ghost" data-act="goto" data-tab="book">Book Froyo</button></div></div></section>';
+  if (!S.mineLoaded) return '<section><div class="panel empty">Loading your bookings…</div></section>';
+  if (!S.mine.length) return '<section><div class="panel empty"><h2 style="font-size:20px;margin-bottom:6px">No bookings yet</h2><p>Bookings you make appear here with the deposit and balance due dates.</p><button class="btn" data-act="goto" data-tab="book">Book Froyo</button></div></section>';
+  return '<section><div class="step-head"><h2>My bookings</h2></div>'+S.mine.map(b=>bkCard(b,false)).join("")+'<p class="note">To change or cancel a booking, reply to our email or call us with your booking reference.</p></section>';
 }
 
 function unitSvg(id){
@@ -256,46 +329,59 @@ function unitSvg(id){
 }
 function dayName(n){ if(n===0) return "Today"; if(n===1) return "Tomorrow"; const d=addDays(n); return ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][d.getDay()]+" "+d.getDate()+" "+MON3[d.getMonth()]; }
 function mapSvg(stop, live){
-  const others = TRAILER.filter(t=>t.day===0 && t!==stop && t.x);
+  const others = S.trailer.stops.filter(t=>t.day===0 && t.id!==stop.id && t.x);
   const lw = stop.place.length*7+18, lx = stop.x+14+lw > 352 ? stop.x-14-lw : stop.x+14;
   let s = '<svg class="map" viewBox="0 0 360 225" role="img" aria-label="Map showing the trailer at '+esc(stop.place)+'">'
     + '<rect width="360" height="225" fill="var(--surface-2)"/>'
     + '<rect x="70" y="40" width="110" height="80" rx="14" fill="var(--mint-soft)"/>'
     + '<path d="M-10 170 C 60 140, 90 190, 170 160 S 290 120, 370 150" fill="none" stroke="var(--mint)" stroke-width="14" opacity=".55"/>'
-    + '<g stroke="var(--surface)" stroke-width="9" stroke-linecap="round"><path d="M0 60H360"/><path d="M200 0V225"/><path d="M40 0L120 225"/><path d="M200 130H360"/><path d="M280 0V130"/></g>'
-    + '<g font-family="Nunito Sans, system-ui, sans-serif" font-size="10" font-weight="700" fill="var(--ink-3)"><text x="206" y="18">High Street</text><text x="290" y="124">Castle St</text><text x="84" y="112">Park</text><text x="12" y="190">River Wey</text></g>';
-  others.forEach(o=>{ s += '<circle cx="'+o.x+'" cy="'+o.y+'" r="6" fill="var(--ink-3)" opacity=".6"/>'; });
-  s += (live?'<circle cx="'+stop.x+'" cy="'+(stop.y)+'" r="16" fill="var(--berry)" opacity=".18"/>':'')
-    + '<path d="M'+stop.x+' '+(stop.y+2)+' c-9-12-13-17-13-24 a13 13 0 0 1 26 0 c0 7-4 12-13 24z" fill="var(--berry)" transform="translate(0,-2)"/>'
-    + '<circle cx="'+stop.x+'" cy="'+(stop.y-24)+'" r="5" fill="var(--ground)"/>'
+    + '<g stroke="var(--surface)" stroke-width="9" stroke-linecap="round"><path d="M0 60H360"/><path d="M200 0V225"/><path d="M40 0L120 225"/><path d="M200 130H360"/><path d="M280 0V130"/></g>';
+  others.forEach(o=>{ s += '<circle cx="'+(+o.x)+'" cy="'+(+o.y)+'" r="6" fill="var(--ink-3)" opacity=".6"/>'; });
+  s += (live?'<circle cx="'+(+stop.x)+'" cy="'+(+stop.y)+'" r="16" fill="var(--berry)" opacity=".18"/>':'')
+    + '<path d="M'+(+stop.x)+' '+(stop.y+2)+' c-9-12-13-17-13-24 a13 13 0 0 1 26 0 c0 7-4 12-13 24z" fill="var(--berry)" transform="translate(0,-2)"/>'
+    + '<circle cx="'+(+stop.x)+'" cy="'+(stop.y-24)+'" r="5" fill="var(--ground)"/>'
     + '<rect x="'+lx+'" y="'+(stop.y-40)+'" width="'+lw+'" height="22" rx="8" fill="var(--ink)"/>'
-    + '<text x="'+(lx+9)+'" y="'+(stop.y-25)+'" font-family="Nunito Sans, system-ui, sans-serif" font-size="11.5" font-weight="800" fill="var(--ground)">'+esc(stop.place)+'</text></svg>';
+    + '<text x="'+(lx+9)+'" y="'+(stop.y-25)+'" font-family="Jost, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="var(--ground)">'+esc(stop.place)+'</text></svg>';
   return s;
 }
+function trailerNow(){ const T=S.trailer; return T.live ? T.stops.find(t=>t.id===T.now_id) || null : null; }
+function trailerNext(now){
+  const nowM = new Date().getHours()*60 + new Date().getMinutes();
+  const mins = t => { const [h,m]=t.split(":").map(Number); return h*60+m; };
+  return S.trailer.stops.find(t=>!t.private && t!==now && (t.day>0 || mins(t.to) > nowM)) || null;
+}
+async function loadTrailer(){ try { S.trailer = await Neon.rpc("get_trailer"); } catch(e){} if (S.tab==="find"||S.tab==="rewards"||S.tab==="ops") render(); }
 function renderFind(){
-  const now = S.live ? TRAILER[S.liveStop] : null;
-  const next = TRAILER.find(t=>!t.private && t!==now && (t.day>0 || (S.live && TRAILER.indexOf(t)>S.liveStop) || (!S.live && t.day===0 && TRAILER.indexOf(t)>=S.liveStop)));
-  const focus = now || next;
+  const now = trailerNow(), next = trailerNext(now), focus = now || next;
   let h = '<section><div class="step-head"><h2>Find the trailer</h2><span class="eyebrow">Public pop-ups</span></div>';
   h += '<div class="live"><div class="live-head">';
-  if (now) h += '<span class="live-state"><span class="dot"></span>Serving now · updated 2 min ago</span><h2>'+esc(now.place)+'</h2><span class="muted">'+esc(now.area)+' · until '+now.to+'</span>';
-  else h += '<span class="live-state off"><span class="dot"></span>Not serving right now</span><h2>Next: '+esc(next.place)+'</h2><span class="muted">'+dayName(next.day)+', '+next.from+'–'+next.to+' · '+esc(next.area)+'</span>';
+  if (now) h += '<span class="live-state"><span class="dot"></span>Serving now</span><h2>'+esc(now.place)+'</h2><span class="muted">'+esc(now.area)+' · until '+esc(now.to)+'</span>';
+  else if (next) h += '<span class="live-state off"><span class="dot"></span>Not serving right now</span><h2>Next: '+esc(next.place)+'</h2><span class="muted">'+dayName(next.day)+', '+esc(next.from)+'–'+esc(next.to)+(next.area?' · '+esc(next.area):'')+'</span>';
+  else h += '<span class="live-state off"><span class="dot"></span>Not serving right now</span><h2>No public stops this week</h2><span class="muted">Check back soon.</span>';
   h += '</div>';
-  if (focus && focus.x) h += mapSvg(focus, !!now) + '<div class="map-cap">Map preview. In the app this is a live map using the trailer’s GPS.</div>';
-  h += '<div class="live-actions"><a class="btn small" href="'+mapsUrl(focus.place+" "+focus.pc)+'" target="_blank" rel="noopener">Directions</a><button class="btn ghost small" data-act="notify" aria-pressed="'+S.notify+'">'+(S.notify?"✓ Nearby alerts on":"Alert me when it’s nearby")+'</button></div></div>';
-  h += '<div class="panel"><div class="eyebrow">This week’s stops</div><ul class="stops">';
-  let lastDay = -1;
-  TRAILER.forEach((t,i)=>{
-    if (t.day!==lastDay){ h += '<li class="day-label">'+dayName(t.day)+'</li>'; lastDay=t.day; }
-    const isNow = now===t;
-    if (t.private) h += '<li class="stop private"><span class="when">'+t.from+'–'+t.to+'</span><span><strong>Private event</strong><small>Not open to the public</small></span><span></span></li>';
-    else h += '<li class="stop'+(isNow?" now":"")+'"><span class="when">'+t.from+'–'+t.to+'</span><span><strong>'+(isNow?"● ":"")+esc(t.place)+'</strong><small>'+esc(t.area)+'</small></span><a href="'+mapsUrl(t.place+" "+t.pc)+'" target="_blank" rel="noopener">Map</a></li>';
-  });
-  h += '</ul></div><div class="panel empty" style="padding:18px 16px"><strong>Want the trailer at your own event?</strong><p style="margin:4px 0 12px">Weddings, fêtes, festivals and garden parties.</p><button class="btn small" data-act="goto" data-tab="book">Book the trailer</button></div>';
-  h += '<p class="note">Example schedule. The operator sets public stops in the Operator tab, and customers can follow Froyo on the go to get an alert when the trailer is serving nearby.</p></section>';
+  if (focus && focus.x) h += mapSvg(focus, !!now) + '<div class="map-cap">Map preview, not to scale. Use Directions for the exact spot.</div>';
+  if (focus) h += '<div class="live-actions"><a class="btn small" href="'+mapsUrl(focus.place+" "+focus.pc)+'" target="_blank" rel="noopener noreferrer">Directions</a></div>';
+  h += '</div>';
+  if (S.trailer.stops.length){
+    h += '<div class="panel"><div class="eyebrow">This week’s stops</div><ul class="stops">';
+    let lastDay = -1;
+    S.trailer.stops.forEach(t=>{
+      if (t.day!==lastDay){ h += '<li class="day-label">'+dayName(t.day)+'</li>'; lastDay=t.day; }
+      const isNow = now && now.id===t.id;
+      if (t.private) h += '<li class="stop private"><span class="when">'+esc(t.from)+'–'+esc(t.to)+'</span><span><strong>Private event</strong><small>Not open to the public</small></span><span></span></li>';
+      else h += '<li class="stop'+(isNow?" now":"")+'"><span class="when">'+esc(t.from)+'–'+esc(t.to)+'</span><span><strong>'+(isNow?"● ":"")+esc(t.place)+'</strong><small>'+esc(t.area)+'</small></span><a href="'+mapsUrl(t.place+" "+t.pc)+'" target="_blank" rel="noopener noreferrer">Map</a></li>';
+    });
+    h += '</ul></div>';
+  }
+  h += '<div class="panel empty" style="padding:18px 16px"><strong>Want the trailer at your own event?</strong><p style="margin:4px 0 12px">Weddings, fêtes, festivals and garden parties.</p><button class="btn small" data-act="goto" data-tab="book">Book the trailer</button></div></section>';
   return h;
 }
 
+async function loadOps(){
+  S.opsLoaded = true;
+  try { S.ops = (await Neon.rpc("staff_bookings", {}, true)).map(normB); } catch(e){ S.opsLoaded=false; toast(e.message); }
+  if (S.tab==="ops") render();
+}
 function renderOps(){
   const seg = '<div class="seg" role="group" aria-label="Operator views"><button data-act="opsview" data-v="events" aria-pressed="'+(S.opsView==="events")+'">Events</button><button data-act="opsview" data-v="till" aria-pressed="'+(S.opsView==="till")+'">Stamp till</button></div>';
   if (S.opsView==="till") return '<section>'+seg+renderTill()+'</section>';
@@ -303,15 +389,16 @@ function renderOps(){
   const f = S.opsFilter;
   const shown = list.filter(b=>f==="all"||b.status===f);
   const pipeline = list.reduce((s,b)=>s+b.total,0);
-  const deposits = list.filter(b=>b.status!=="enquiry").reduce((s,b)=>s+Math.round(b.total*DEPOSIT),0);
+  const deposits = list.filter(b=>b.status!=="pending_deposit").reduce((s,b)=>s+b.deposit,0);
+  const T = S.trailer, today = T.stops.filter(t=>t.day===0 && !t.private);
   let h = '<section>'+seg+'<div class="step-head"><h2>Upcoming events</h2><span class="eyebrow">Operator view</span></div>';
   h += '<div class="stats"><div class="stat"><small>Events</small><b class="mono">'+list.length+'</b></div><div class="stat"><small>Pipeline</small><b class="mono">'+gbp(pipeline)+'</b></div><div class="stat"><small>Deposits in</small><b class="mono">'+gbp(deposits)+'</b></div></div>';
-  h += '<div class="panel"><div class="switch"><label for="liveToggle"><strong>Share trailer location</strong><br><small class="muted">'+(S.live?"Customers see where you’re serving now":"Customers see your next stop only")+'</small></label><input type="checkbox" id="liveToggle" '+(S.live?"checked":"")+'></div>'
-    + '<div class="eyebrow" style="margin:12px 0 6px">Serving today at</div><div class="chips">'+TRAILER.map((t,i)=>t.day===0?'<button class="chip" data-act="stop" data-i="'+i+'" aria-pressed="'+(S.live&&S.liveStop===i)+'">'+t.from+' '+esc(t.place)+'</button>':'').join("")+'</div>'
-    + '<p class="hint" style="margin:10px 0 0">In the live app, the trailer’s phone shares GPS while this is on, and switches off automatically at the end of each stop.</p></div>';
-  h += '<div class="chips" style="margin-bottom:12px">'+[["all","All"],["enquiry","Enquiries"],["deposit","Deposit paid"],["confirmed","Confirmed"]].map(x=>'<button class="chip" data-act="filter" data-f="'+x[0]+'" aria-pressed="'+(f===x[0])+'">'+x[1]+'</button>').join("")+'</div>';
-  h += shown.length ? shown.map(b=>bkCard(b,true)).join("") : '<div class="panel empty">Nothing with this status.</div>';
-  h += '<p class="note">Cards marked Example are sample data. Bookings you make in the Book tab appear here too.</p></section>';
+  h += '<div class="panel"><div class="switch"><label for="liveToggle"><strong>Share trailer location</strong><br><small class="muted">'+(T.live?"Customers see where you’re serving now":"Customers see your next stop only")+'</small></label><input type="checkbox" id="liveToggle" '+(T.live?"checked":"")+'></div>'
+    + (today.length ? '<div class="eyebrow" style="margin:12px 0 6px">Serving today at</div><div class="chips">'+today.map(t=>'<button class="chip" data-act="stop" data-i="'+t.id+'" aria-pressed="'+(T.live&&T.now_id===t.id)+'">'+esc(t.from)+' '+esc(t.place)+'</button>').join("")+'</div>' : '<p class="hint" style="margin:10px 0 0">No public stops today.</p>')
+    + '</div>';
+  h += '<div class="chips" style="margin-bottom:12px">'+[["all","All"],["pending_deposit","Deposit due"],["deposit_paid","Deposit paid"],["confirmed","Confirmed"]].map(x=>'<button class="chip" data-act="filter" data-f="'+x[0]+'" aria-pressed="'+(f===x[0])+'">'+x[1]+'</button>').join("")+'</div>';
+  h += !S.opsLoaded ? '<div class="panel empty">Loading bookings…</div>' : shown.length ? shown.map(b=>bkCard(b,true)).join("") : '<div class="panel empty">Nothing with this status.</div>';
+  h += '<p class="note">Marking a deposit as paid adds '+BOOKING_BONUS+' bonus stamps to the customer’s card. Only do it once the money has arrived.</p></section>';
   return h;
 }
 
@@ -321,11 +408,11 @@ function renderBar(){
   bar.hidden = false;
   if (S.step===5){ inn.innerHTML = '<button class="btn ghost" data-act="goto" data-tab="mine" style="flex:1">View my bookings</button><button class="btn" data-act="restart" style="flex:1">Book another</button>'; return; }
   const q = quote();
-  const est = S.step>=2 ? '<b class="mono">'+gbp(q.total)+'</b><small>Deposit '+gbp(q.deposit)+' today</small>'
+  const est = S.step>=2 ? '<b class="mono">'+gbp(q.total)+'</b><small>Deposit '+gbp(q.deposit)+' to hold your date</small>'
             : S.date ? '<b style="font-size:16px">'+fmtDate(S.date)+(S.time?' · '+S.time:'')+'</b><small>'+evName(S.event)+'</small>'
             : '<b style="font-size:16px">'+(S.event?evName(S.event):"From £395")+'</b><small>'+(S.event?"Next, pick a date":"25% deposit secures your date")+'</small>';
-  const label = S.step===4 ? "Pay "+gbp(q.deposit)+" deposit" : "Continue";
-  inn.innerHTML = (S.step>0?'<button class="btn ghost" data-act="back" aria-label="Back">‹</button>':'')+'<div class="est">'+est+'</div><button class="btn" data-act="next" '+(S.step===3||canNext()?"":"disabled")+'>'+label+'</button>';
+  const label = S.step===4 ? (S.busy ? "Booking…" : S.user ? "Confirm booking" : "Sign in to book") : "Continue";
+  inn.innerHTML = (S.step>0?'<button class="btn ghost" data-act="back" aria-label="Back">‹</button>':'')+'<div class="est">'+est+'</div><button class="btn" data-act="next" '+((S.step===3||canNext()) && !S.busy?"":"disabled")+'>'+label+'</button>';
 }
 
 // ---------- events ----------
@@ -336,18 +423,16 @@ document.addEventListener("click", e=>{
   if (S.acctOpen){ S.acctOpen=false; renderAcct(); }
   if (a==="signin"){ openSignin(); return; }
   if (a==="signin-staff"){ openSignin("staff"); return; }
-  if (a==="sso"){ signInCustomer("Alex","alex@example.com"); toast("Signed in with "+t.dataset.p); return; }
   if (a==="guest"){ S.view="app"; S.auth.err=""; render(); window.scrollTo(0,0); return; }
   if (a==="staff-screen"){ S.auth.screen="staff"; S.auth.err=""; render(); return; }
   if (a==="change-email"){ S.auth.screen="welcome"; S.auth.err=""; render(); return; }
-  if (a==="resend"){ toast("New code sent to "+S.auth.email); return; }
-  if (a==="signout"){ S.user=null; S.acctOpen=false; toast("Signed out"); render(); return; }
+  if (a==="resend"){ if (Date.now() < S.auth.resendAt){ toast("Please wait a moment before asking for another code"); return; } sendCode(S.auth.email, true); return; }
+  if (a==="signout"){ signOut(); return; }
   if (!a && t.dataset.tab){ S.tab = t.dataset.tab; render(); return; }
   if (a==="goto"){ S.tab=t.dataset.tab; render(); window.scrollTo(0,0); return; }
   if (a==="event"){ S.event=t.dataset.id; if(!S.unit && (S.event==="festival"||S.event==="school")) S.unit="trailer"; }
   if (a==="unit"){ if(S.unit!==t.dataset.id){ S.unit=t.dataset.id; S.date=null; S.time=null; } }
-  if (a==="stop"){ S.liveStop=+t.dataset.i; S.live=true; toast("Customers now see: "+TRAILER[S.liveStop].place); }
-  if (a==="notify"){ S.notify=!S.notify; toast(S.notify?"We’ll let you know when the trailer is nearby":"Nearby alerts off"); }
+  if (a==="stop"){ setLive(true, +t.dataset.i); return; }
   if (a==="month"){ S.calMonth = new Date(S.calMonth.getFullYear(), S.calMonth.getMonth()+(+t.dataset.d), 1); }
   if (a==="date"){ const [y,m,d]=t.dataset.k.split("-").map(Number); S.date=new Date(y,m-1,d); if (S.time && dayInfo(S.date, S.unit).taken.includes(S.time)) S.time=null; }
   if (a==="time"){ S.time=t.dataset.t; }
@@ -361,24 +446,22 @@ document.addEventListener("click", e=>{
     if (S.step===4){ book(); } else { S.step++; S.showErr=false; }
     window.scrollTo(0,0);
   }
-  if (a==="restart"){ Object.assign(S,{step:0,event:null,unit:null,date:null,time:null,pkg:null,pkgTouched:false,extraHours:0,addons:new Set(),venue:"",notes:""}); }
+  if (a==="restart"){ Object.assign(S,{finishBooking:false,step:0,event:null,unit:null,date:null,time:null,pkg:null,pkgTouched:false,extraHours:0,addons:new Set(),venue:"",notes:""}); }
   if (a==="filter"){ S.opsFilter=t.dataset.f; }
   if (a==="opsview"){ S.opsView=t.dataset.v; }
-  if (a==="rw-wallet"){ toast("In the live app this adds your card to "+t.dataset.w); return; }
-  if (a==="rw-copy"){ const txt=$("#refcode").textContent; try{ navigator.clipboard.writeText(txt).then(()=>toast("Code copied"),selectCode); }catch(err){ selectCode(); } return; }
-  if (a==="rw-bday"){ const v=$("#bday").value.trim(); if(!v){ toast("Add a date, like 14 March"); $("#bday").focus(); return; } MEMBERS[ME].birthday=v; toast("Birthday saved"); }
-  if (a==="rw-pick"){ R.lookup=t.dataset.k; R.found=t.dataset.k; R.err=""; R.qty=1; }
-  if (a==="rw-find"){ const v=$("#lookup").value.trim().toUpperCase().replace(/^FR-?/,"FR-"); R.lookup=v; if(MEMBERS[v]){R.found=v;R.err="";R.qty=1;} else {R.found=null; R.err="No member with number "+esc(v)+". Check the number on their card, or pick one below.";} }
+  if (a==="rw-copy-unused"){ const txt=$("#refcode").textContent; try{ navigator.clipboard.writeText(txt).then(()=>toast("Code copied"),selectCode); }catch(err){ selectCode(); } return; }
+  if (a==="rw-bday"){ saveBirthday(); return; }
+  if (a==="rw-find"){ tillFind(); return; }
   if (a==="rw-qty"){ R.qty=Math.max(1,Math.min(MAX_PER_VISIT,R.qty+(+t.dataset.d))); }
-  if (a==="rw-stamp"){ const m=MEMBERS[R.found], n=R.qty, un=addStamps(R.found, n, "stamp", "Trailer · Market Square"); R.today.stamps+=n; R.qty=1; toast(un ? m.name+" unlocked a free cup!" : "Added "+n+" stamp"+(n>1?"s":"")+" for "+m.name); }
-  if (a==="rw-redeem"){ const m=MEMBERS[R.found]; m.rewards--; R.today.redeemed++; m.history.unshift({d:new Date(), t:"redeem", n:0, where:"Trailer · Market Square"}); if(R.found===ME) R.flash=true; toast("Free cup redeemed for "+m.name); }
-  if (a==="adv"){ const b=S.ops.find(x=>x.ref===t.dataset.ref); if(b){ if(b.status==="enquiry"){b.status="deposit";toast("Deposit marked as paid for "+b.ref);} else {b.status="confirmed"; toast(b.ref+" confirmed");} } }
+  if (a==="rw-stamp"){ tillStamp(); return; }
+  if (a==="rw-redeem"){ tillRedeem(); return; }
+  if (a==="adv"){ advance(t.dataset.ref, t); return; }
   render();
 });
 document.addEventListener("keydown", e=>{ if(e.key==="Enter" && e.target.id==="lookup"){ e.preventDefault(); $('[data-act="rw-find"]').click(); } });
 document.addEventListener("change", e=>{
   const t=e.target;
-  if (t.id==="liveToggle"){ S.live=t.checked; toast(S.live?"Location is live for customers":"Location hidden. Customers see the next stop"); render(); return; }
+  if (t.id==="liveToggle"){ setLive(t.checked, null); return; }
   if (t.dataset.act==="addon"){ t.checked?S.addons.add(t.dataset.id):S.addons.delete(t.dataset.id); renderBar(); }
   if (t.id==="guests"){ const y=window.scrollY; render(); window.scrollTo(0,y); }
 });
@@ -388,38 +471,87 @@ document.addEventListener("input", e=>{
   if (t.dataset.f){ S[t.dataset.f]=t.value; if (S.step===3) renderBar(); }
 });
 
-function book(){
-  const q = quote(), chars="ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-  let ref="FR-"; for(let i=0;i<4;i++) ref+=chars[Math.floor(Math.random()*chars.length)];
-  const b = {ref, name:S.name.trim(), email:S.email.trim(), event:S.event, date:S.date, time:S.time, guests:S.guests, pkg:pkgObj().id, total:q.total, deposit:q.deposit, status:"deposit", postcode:S.postcode.trim(), unit:S.unit};
-  S.mine.unshift(b); S.ops.push(b); S.step=5;
-  if (S.user && !S.user.staff) addStamps(ME, BOOKING_BONUS, "bonus", "Booking bonus · "+b.ref); else S.pendingBonus = b.ref;
+async function book(){
+  if (!S.user){ S.finishBooking = true; openSignin(); S.auth.note = "Sign in to finish your booking. Your details are kept."; render(); return; }
+  if (S.busy) return;
+  S.busy = true; renderBar();
+  const payload = {event:S.event, unit:S.unit, date:key(S.date), time:S.time, guests:S.guests, pkg:pkgObj().id, addons:[...S.addons],
+    venue:S.venue.trim(), postcode:S.postcode.trim(), name:S.name.trim(), email:S.email.trim(), phone:S.phone.trim(), notes:S.notes.trim()};
+  try {
+    const b = normB(await Neon.rpc("create_booking", {p: payload}, true));
+    S.mine = [b].concat(S.mine.filter(x=>x.ref!==b.ref)); S.step = 5; S.finishBooking=false;
+    delete AV[avKey(S.unit, S.date)];
+  } catch(e){
+    toast(e.message);
+    if (/just been booked/.test(e.message)){ delete AV[avKey(S.unit, S.date)]; S.time=null; S.step=1; }
+  }
+  S.busy = false; render(); window.scrollTo(0,0);
+}
+
+async function setLive(on, stopId){
+  try { S.trailer = await Neon.rpc("staff_set_live", {p_live:on, p_stop_id:stopId}, true);
+        toast(on ? "Location is live for customers" : "Location hidden. Customers see the next stop"); }
+  catch(e){ toast(e.message); }
+  render();
+}
+async function advance(ref, btn){
+  if (btn) btn.disabled = true;
+  try { const b = normB(await Neon.rpc("staff_advance_booking", {p_ref: ref}, true));
+        S.ops = S.ops.map(x=>x.ref===b.ref ? Object.assign({}, x, b) : x);
+        toast(b.status==="deposit_paid" ? "Deposit marked as paid. "+BOOKING_BONUS+" bonus stamps added" : b.ref+" confirmed"); }
+  catch(e){ toast(e.message); }
+  render();
 }
 
 // ================= Rewards (loyalty card) =================
 const GOAL = 10, MAX_PER_VISIT = 6, BOOKING_BONUS = 2;
-const agoD = n => { const d=new Date(); d.setDate(d.getDate()-n); return d; };
-const MEMBERS = {
-  "FR-48213": {name:"Alex", since:"Jun 2026", stamps:5, rewards:0, birthday:"", referrals:1, history:[
-    {d:agoD(3), t:"stamp", n:2, where:"Trailer · Market Square"},
-    {d:agoD(11), t:"stamp", n:1, where:"Trailer · Riverside Park"},
-    {d:agoD(19), t:"bonus", n:1, where:"Friend joined with your code"},
-    {d:agoD(26), t:"stamp", n:1, where:"Indoor cart · Lumen Studios summer social"}
-  ]},
-  "FR-10577": {name:"Jordan", since:"Apr 2026", stamps:8, rewards:1, birthday:"", referrals:0, history:[]},
-  "FR-33902": {name:"Sam", since:"Aug 2026", stamps:2, rewards:0, birthday:"", referrals:0, history:[]}
-};
-const ME = "FR-48213";
-const R = {lookup:ME, found:ME, qty:1, err:"", today:{stamps:14, redeemed:3, members:212}, newStamps:[], flash:false};
-
-function addStamps(id, n, type, where){
-  const m = MEMBERS[id], newOnes=[]; let unlocked=0;
-  for (let i=0;i<n;i++){ m.stamps++; newOnes.push(m.stamps); }
-  while (m.stamps >= GOAL-1){ m.stamps -= GOAL-1; m.rewards++; unlocked++; }
-  m.history.unshift({d:new Date(), t:type, n, where});
-  if (id===ME){ R.newStamps = unlocked ? [GOAL].concat(Array.from({length:m.stamps},(_,i)=>i+1)) : newOnes; R.flash=true; if(unlocked) setTimeout(confetti,80); }
-  return unlocked;
+let CARD = null;        // the signed-in customer's stamp card, from the database
+let CARD_LOADING = false;
+const R = {lookup:"", found:null, qty:1, err:"", stats:null, busy:false, newStamps:[], flash:false};
+async function loadCard(){
+  if (CARD_LOADING) return; CARD_LOADING = true;
+  try {
+    let c = await Neon.rpc("my_card", {}, true);
+    if (!c.name && S.user){ c = Object.assign(c, await Neon.rpc("update_my_card", {p_name: S.user.name}, true)); }
+    const before = CARD;
+    CARD = c;
+    if (before && (c.stamps > before.stamps || c.rewards > before.rewards)){ R.newStamps = c.rewards > before.rewards ? [GOAL] : Array.from({length:c.stamps-before.stamps},(_,i)=>before.stamps+i+1); R.flash = true; if (c.rewards > before.rewards) setTimeout(confetti,80); }
+  } catch(e){ toast(e.message); }
+  CARD_LOADING = false;
+  if (S.tab==="rewards") render();
 }
+async function saveBirthday(){
+  const v = $("#bday").value.trim();
+  if (v.length < 3){ toast("Add a date, like 14 March"); $("#bday").focus(); return; }
+  try { CARD = Object.assign(CARD||{}, await Neon.rpc("update_my_card", {p_birthday: v}, true)); toast("Birthday saved"); }
+  catch(e){ toast(e.message); }
+  render();
+}
+async function tillFind(){
+  const v = $("#lookup").value.trim().toUpperCase().replace(/^FR-?/,"FR-");
+  R.lookup = v; R.err = ""; R.qty = 1;
+  if (!/^FR-\d{5}$/.test(v)){ R.found=null; R.err = "Member numbers look like FR-12345."; render(); return; }
+  try { R.found = await Neon.rpc("staff_find_member", {p_member_no: v}, true); if (!R.found) R.err = "No member with number "+esc(v)+". Check the number on their card."; }
+  catch(e){ R.found=null; R.err = esc(e.message); }
+  render();
+}
+async function tillStamp(){
+  if (!R.found || R.busy) return; R.busy = true; render();
+  try { const m = await Neon.rpc("staff_add_stamps", {p_member_no: R.found.member_no, p_n: R.qty, p_where: tillWhere()}, true);
+        const n = R.qty; R.found = m; R.qty = 1;
+        toast(m.unlocked ? m.name+" unlocked a free cup!" : "Added "+n+" stamp"+(n>1?"s":"")+" for "+m.name);
+        loadStats(); }
+  catch(e){ toast(e.message); }
+  R.busy = false; render();
+}
+async function tillRedeem(){
+  if (!R.found || R.busy) return; R.busy = true; render();
+  try { R.found = await Neon.rpc("staff_redeem", {p_member_no: R.found.member_no, p_where: tillWhere()}, true); toast("Free cup redeemed for "+R.found.name); loadStats(); }
+  catch(e){ toast(e.message); }
+  R.busy = false; render();
+}
+function tillWhere(){ const n = trailerNow(); return n ? "Trailer · "+n.place : "Froyo on the go"; }
+async function loadStats(){ try { R.stats = await Neon.rpc("staff_stats", {}, true); } catch(e){} if (S.tab==="ops") render(); }
 const SWIRL = "data:image/webp;base64,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";
 let _cupN = 0;
 function cupArt(){
@@ -452,55 +584,59 @@ function loyaltyCard(m){
     + '<div class="count mono">'+m.stamps+'<span style="opacity:.6;font-size:24px">/9</span><small>stamps</small></div></div>'
     + '<div class="stamps">'+st+'</div>'
     + (m.rewards ? '<div class="unlocked">'+stampCup().replace('60%','30').replace('60%','30')+'<div><b>'+(m.rewards>1?m.rewards+" free cups":"Free cup")+' unlocked</b><span style="font-size:13px">Show your code at the cart or trailer</span></div></div>' : '')
-    + '<div class="lfoot"><span>Member since '+m.since+'</span><span class="mono" style="letter-spacing:.06em">'+ME+'</span></div></div>';
+    + '<div class="lfoot"><span>Member since '+esc(m.since)+'</span><span class="mono" style="letter-spacing:.06em">'+esc(m.member_no)+'</span></div></div>';
 }
 
 function renderRewards(){
-  const m = MEMBERS[ME], pct = Math.min(100, m.stamps/9*100);
-  const now = S.live ? TRAILER[S.liveStop] : null;
+  if (!CARD) return '<section><div class="step-head"><h2>Rewards</h2></div><div class="panel empty">Loading your stamp card…</div></section>';
+  const m = CARD, pct = Math.min(100, m.stamps/9*100);
+  const now = trailerNow();
   let h = '<section><div class="step-head"><h2>Rewards</h2><span class="eyebrow">Buy 9, the 10th is free</span></div>' + loyaltyCard(m);
-  h += '<div class="scan"><div class="qr" id="qr" aria-label="Your member QR code"></div><div><h3>Scan to collect</h3><p>Show this when you order at the cart or trailer. One stamp per cup.</p><div class="memno">'+ME+'</div></div></div>';
-  h += '<button class="nextstop'+(now?"":" off")+'" data-act="goto" data-tab="find"><span class="ldot"></span><span style="flex:1"><strong>'+(now?"Trailer serving now":"Trailer not serving right now")+'</strong><span class="muted" style="display:block;font-size:13px">'+(now?esc(now.place)+" · until "+now.to:"See this week’s stops")+'</span></span><span aria-hidden="true" style="font-weight:800">›</span></button>';
-  h += '<div class="panel"><div class="panel-head"><h3 style="font-size:16px">Keep it on your lock screen</h3></div><p class="muted" style="margin:0 0 10px;font-size:13px">Your card updates on its own after every visit.</p><div class="wallet"><button class="btn dark small" data-act="rw-wallet" data-w="Apple Wallet">Add to Apple Wallet</button><button class="btn ghost small" data-act="rw-wallet" data-w="Google Wallet">Add to Google Wallet</button></div></div>';
+  h += '<div class="scan"><div class="qr" id="qr" aria-label="Your member QR code"></div><div><h3>Scan to collect</h3><p>Show this when you order at the cart or trailer. One stamp per cup.</p><div class="memno">'+esc(m.member_no)+'</div></div></div>';
+  h += '<button class="nextstop'+(now?"":" off")+'" data-act="goto" data-tab="find"><span class="ldot"></span><span style="flex:1"><strong>'+(now?"Trailer serving now":"Trailer not serving right now")+'</strong><span class="muted" style="display:block;font-size:13px">'+(now?esc(now.place)+" · until "+esc(now.to):"See this week’s stops")+'</span></span><span aria-hidden="true" style="font-weight:800">›</span></button>';
   h += '<div class="panel"><div class="eyebrow">Perks</div>';
   h += '<div class="perk"><span class="pico">'+stampCup().replace(/60%/g,'30')+'</span><div><h3>Free cup every 10th visit</h3><p>Buy 9 cups, the 10th is on us. Any size, any toppings.</p><div class="prog"><i style="width:'+pct+'%"></i></div><div class="muted mono" style="font-size:12.5px;margin-top:4px">'+m.stamps+' of 9 stamps'+(m.rewards?' · '+m.rewards+' ready to use':'')+'</div></div></div>';
-  h += '<div class="perk"><span class="pico"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="12" rx="2" fill="var(--berry)"/><path d="M7 7V5h10v2" fill="none" stroke="var(--ink)" stroke-width="2"/><path d="M3 12h18" stroke="#fff" stroke-width="1.5"/></svg></span><div><h3>Book an event, get '+BOOKING_BONUS+' stamps</h3><p>Every paid booking for the cart or trailer adds '+BOOKING_BONUS+' bonus stamps to your card.</p><button class="btn ghost small" data-act="goto" data-tab="book">Book Froyo</button></div></div>';
+  h += '<div class="perk"><span class="pico"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="12" rx="2" fill="var(--berry)"/><path d="M7 7V5h10v2" fill="none" stroke="var(--ink)" stroke-width="2"/><path d="M3 12h18" stroke="#fff" stroke-width="1.5"/></svg></span><div><h3>Book an event, get '+BOOKING_BONUS+' stamps</h3><p>Every booking adds '+BOOKING_BONUS+' bonus stamps to your card once the deposit is paid.</p><button class="btn ghost small" data-act="goto" data-tab="book">Book Froyo</button></div></div>';
   h += '<div class="perk"><span class="pico"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="9" rx="2" fill="var(--berry)"/><path d="M12 11V7" stroke="var(--ink)" stroke-width="2"/><circle cx="12" cy="5" r="2" fill="var(--yolk)"/></svg></span><div><h3>Birthday treat</h3><p>A free cup any day in your birthday week.</p>'
-    + (m.birthday ? '<div class="muted" style="font-size:13px"><strong style="color:var(--ink)">Saved: '+esc(m.birthday)+'</strong> · We’ll add your treat that week.</div>'
-      : '<div class="inline"><div class="field"><label for="bday">Your birthday</label><input id="bday" type="text" placeholder="e.g. 14 March"></div><button class="btn small" data-act="rw-bday">Save</button></div>') + '</div></div>';
-  h += '<div class="perk"><span class="pico"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="3.5" fill="var(--berry)"/><circle cx="16.5" cy="9" r="3.5" fill="var(--mint)"/><path d="M2 20c0-4 3-6 6-6s6 2 6 6zM11 20c0-4 3-6 5.5-6S22 16 22 20z" fill="var(--ink)" opacity=".8"/></svg></span><div><h3>Bring a friend</h3><p>When a friend joins with your code and buys their first cup, you both get a bonus stamp.</p><div class="code"><span class="mono" id="refcode">ALEX-FROYO</span><button class="btn ghost small" data-act="rw-copy">Copy code</button></div></div></div>';
+    + (m.birthday ? '<div class="muted" style="font-size:13px"><strong style="color:var(--ink)">Saved: '+esc(m.birthday)+'</strong> · Show your card that week.</div>'
+      : '<div class="inline"><div class="field"><label for="bday">Your birthday</label><input id="bday" type="text" maxlength="30" placeholder="e.g. 14 March"></div><button class="btn small" data-act="rw-bday">Save</button></div><p class="hint" style="margin:6px 0 0">You can only set this once.</p>') + '</div></div>';
   h += '<div class="perk"><span class="pico"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z" fill="var(--yolk)" stroke="var(--ink)" stroke-width="1.2" stroke-linejoin="round"/></svg></span><div><h3>Double stamp Tuesdays</h3><p>Every cup bought from the trailer on a Tuesday counts twice.</p></div></div></div>';
-  h += '<div class="panel"><div class="panel-head"><h3 style="font-size:16px">Activity</h3><span class="sample-tag">Includes examples</span></div><ul class="hist">';
-  m.history.slice(0,6).forEach((x,i)=>{
-    const red = x.t==="redeem";
-    const title = red ? "Free cup redeemed" : x.t==="bonus" ? "+"+x.n+" bonus stamp"+(x.n>1?"s":"") : x.n+" stamp"+(x.n>1?"s":"")+" collected";
-    h += '<li class="'+(i===0&&R.flash?"new":"")+'"><span class="ic'+(red?" red":"")+'">'+(red?"★":"+"+x.n)+'</span><span><strong>'+title+'</strong><small>'+esc(x.where)+'</small></span><span class="amt muted">'+x.d.getDate()+" "+MON3[x.d.getMonth()]+'</span></li>';
-  });
-  h += '</ul></div><p class="note">Example member and activity. Stamps are added by the team when you pay, so they can’t be collected online. Free cups don’t expire while you visit at least once every 12 months.</p></section>';
+  h += '<div class="panel"><div class="panel-head"><h3 style="font-size:16px">Activity</h3></div>';
+  if (!m.history.length) h += '<p class="muted" style="margin:6px 0">No stamps yet. Show your code next time you order.</p>';
+  else {
+    h += '<ul class="hist">';
+    m.history.slice(0,6).forEach((x,i)=>{
+      const red = x.kind==="redeem", d = new Date(x.at);
+      const title = red ? "Free cup redeemed" : x.kind==="bonus" ? "+"+x.n+" bonus stamp"+(x.n>1?"s":"") : x.n+" stamp"+(x.n>1?"s":"")+" collected";
+      h += '<li class="'+(i===0&&R.flash?"new":"")+'"><span class="ic'+(red?" red":"")+'">'+(red?"★":"+"+x.n)+'</span><span><strong>'+title+'</strong><small>'+esc(x.where)+'</small></span><span class="amt muted">'+d.getDate()+" "+MON3[d.getMonth()]+'</span></li>';
+    });
+    h += '</ul>';
+  }
+  h += '</div><p class="note">Stamps are added by the team when you pay, so they can’t be collected online. Free cups don’t expire while you visit at least once every 12 months.</p></section>';
   return h;
 }
 
 function renderTill(){
-  const m = R.found ? MEMBERS[R.found] : null;
-  let h = '<div class="till"><div class="eyebrow">Stamp a card · cart or trailer tablet</div><h2>Scan or type a member number</h2>';
-  h += '<div class="inline" style="margin-top:12px"><div class="field"><label for="lookup">Member number</label><input id="lookup" value="'+esc(R.lookup)+'" autocomplete="off" spellcheck="false"></div><button class="btn small" data-act="rw-find">Find</button></div>';
-  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">'+Object.keys(MEMBERS).map(k=>'<button class="btn ghost small" data-act="rw-pick" data-k="'+k+'">'+k+'</button>').join("")+'</div>';
+  if (!R.stats) loadStats();
+  const m = R.found;
+  let h = '<div class="till"><div class="eyebrow">Stamp a card · cart or trailer tablet</div><h2>Type the member number</h2>';
+  h += '<div class="inline" style="margin-top:12px"><div class="field"><label for="lookup">Member number</label><input id="lookup" value="'+esc(R.lookup)+'" placeholder="FR-12345" maxlength="9" autocomplete="off" spellcheck="false" autocapitalize="characters"></div><button class="btn small" data-act="rw-find">Find</button></div>';
   if (R.err) h += '<div class="terr">'+R.err+'</div>';
   if (m){
     let mini=""; for(let i=1;i<=GOAL;i++) mini += '<i class="'+((i===GOAL?m.rewards>0:i<=m.stamps)?"on":"")+(i===GOAL?" free":"")+'"></i>';
-    h += '<div class="member"><div class="member-top"><div><b>'+esc(m.name)+'</b> <span class="mono" style="opacity:.7;font-size:13px">'+R.found+'</span>'+(R.found===ME?' <span style="font-size:11px;font-weight:800;color:var(--mint)">Rewards tab card</span>':'')+'</div><span class="mono">'+m.stamps+'/9</span></div><div class="mini">'+mini+'</div>'
+    h += '<div class="member"><div class="member-top"><div><b>'+esc(m.name)+'</b> <span class="mono" style="opacity:.7;font-size:13px">'+esc(m.member_no)+'</span></div><span class="mono">'+m.stamps+'/9</span></div><div class="mini">'+mini+'</div>'
       + (m.rewards ? '<div style="margin-top:10px;font-weight:800;color:var(--yolk)">★ '+m.rewards+' free cup'+(m.rewards>1?"s":"")+' ready</div>' : '')
       + '<div class="qty"><span style="font-weight:800">Cups in this order</span><div style="display:flex;align-items:center;gap:8px"><button class="round" data-act="rw-qty" data-d="-1" aria-label="One fewer cup">−</button><span class="n mono" aria-live="polite">'+R.qty+'</span><button class="round" data-act="rw-qty" data-d="1" aria-label="One more cup">+</button></div></div>'
-      + '<div class="tactions"><button class="btn big" data-act="rw-stamp">Add '+R.qty+' stamp'+(R.qty>1?"s":"")+'</button>'
-      + (m.rewards ? '<button class="btn big redeem" data-act="rw-redeem">Redeem free cup</button>' : '')
-      + '</div><div class="thint">Max '+MAX_PER_VISIT+' stamps per order. A free cup doesn’t earn a stamp.</div></div>';
+      + '<div class="tactions"><button class="btn big" data-act="rw-stamp" '+(R.busy?"disabled":"")+'>Add '+R.qty+' stamp'+(R.qty>1?"s":"")+'</button>'
+      + (m.rewards ? '<button class="btn big redeem" data-act="rw-redeem" '+(R.busy?"disabled":"")+'>Redeem free cup</button>' : '')
+      + '</div><div class="thint">Max '+MAX_PER_VISIT+' stamps per order and 18 per member per day. A free cup doesn’t earn a stamp.</div></div>';
   }
-  h += '</div><div class="stats" style="margin-top:14px"><div class="stat"><small>Stamps today</small><b class="mono">'+R.today.stamps+'</b></div><div class="stat"><small>Free cups today</small><b class="mono">'+R.today.redeemed+'</b></div><div class="stat"><small>Members</small><b class="mono">'+R.today.members+'</b></div></div>';
-  h += '<p class="note">Example numbers. In the live app, staff scan the customer’s QR code with the tablet camera, and every stamp is logged against the staff member and location. Stamp Alex’s card here, then open the Rewards tab to see it.</p>';
+  const st = R.stats || {stamps_today:"–", redeemed_today:"–", members:"–"};
+  h += '</div><div class="stats" style="margin-top:14px"><div class="stat"><small>Stamps today</small><b class="mono">'+st.stamps_today+'</b></div><div class="stat"><small>Free cups today</small><b class="mono">'+st.redeemed_today+'</b></div><div class="stat"><small>Members</small><b class="mono">'+st.members+'</b></div></div>';
+  h += '<p class="note">Every stamp and free cup is recorded against your staff account and the time.</p>';
   return h;
 }
-const QR_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 33 33" width="106" height="106" shape-rendering="crispEdges" role="img" aria-label="QR code for member FR-48213"><rect width="100%" height="100%" fill="#fff"/><path fill="#121212" d="M2 2h1v1h-1zM3 2h1v1h-1zM4 2h1v1h-1zM5 2h1v1h-1zM6 2h1v1h-1zM7 2h1v1h-1zM8 2h1v1h-1zM10 2h1v1h-1zM11 2h1v1h-1zM12 2h1v1h-1zM13 2h1v1h-1zM15 2h1v1h-1zM16 2h1v1h-1zM18 2h1v1h-1zM20 2h1v1h-1zM21 2h1v1h-1zM24 2h1v1h-1zM25 2h1v1h-1zM26 2h1v1h-1zM27 2h1v1h-1zM28 2h1v1h-1zM29 2h1v1h-1zM30 2h1v1h-1zM2 3h1v1h-1zM8 3h1v1h-1zM11 3h1v1h-1zM14 3h1v1h-1zM15 3h1v1h-1zM16 3h1v1h-1zM17 3h1v1h-1zM20 3h1v1h-1zM22 3h1v1h-1zM24 3h1v1h-1zM30 3h1v1h-1zM2 4h1v1h-1zM4 4h1v1h-1zM5 4h1v1h-1zM6 4h1v1h-1zM8 4h1v1h-1zM14 4h1v1h-1zM16 4h1v1h-1zM19 4h1v1h-1zM20 4h1v1h-1zM21 4h1v1h-1zM22 4h1v1h-1zM24 4h1v1h-1zM26 4h1v1h-1zM27 4h1v1h-1zM28 4h1v1h-1zM30 4h1v1h-1zM2 5h1v1h-1zM4 5h1v1h-1zM5 5h1v1h-1zM6 5h1v1h-1zM8 5h1v1h-1zM10 5h1v1h-1zM12 5h1v1h-1zM19 5h1v1h-1zM21 5h1v1h-1zM24 5h1v1h-1zM26 5h1v1h-1zM27 5h1v1h-1zM28 5h1v1h-1zM30 5h1v1h-1zM2 6h1v1h-1zM4 6h1v1h-1zM5 6h1v1h-1zM6 6h1v1h-1zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM19 6h1v1h-1zM21 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h1v1h-1zM27 6h1v1h-1zM28 6h1v1h-1zM30 6h1v1h-1zM2 7h1v1h-1zM8 7h1v1h-1zM10 7h1v1h-1zM11 7h1v1h-1zM13 7h1v1h-1zM18 7h1v1h-1zM19 7h1v1h-1zM21 7h1v1h-1zM24 7h1v1h-1zM30 7h1v1h-1zM2 8h1v1h-1zM3 8h1v1h-1zM4 8h1v1h-1zM5 8h1v1h-1zM6 8h1v1h-1zM7 8h1v1h-1zM8 8h1v1h-1zM10 8h1v1h-1zM12 8h1v1h-1zM14 8h1v1h-1zM16 8h1v1h-1zM18 8h1v1h-1zM20 8h1v1h-1zM22 8h1v1h-1zM24 8h1v1h-1zM25 8h1v1h-1zM26 8h1v1h-1zM27 8h1v1h-1zM28 8h1v1h-1zM29 8h1v1h-1zM30 8h1v1h-1zM10 9h1v1h-1zM12 9h1v1h-1zM15 9h1v1h-1zM17 9h1v1h-1zM18 9h1v1h-1zM21 9h1v1h-1zM2 10h1v1h-1zM6 10h1v1h-1zM8 10h1v1h-1zM9 10h1v1h-1zM10 10h1v1h-1zM11 10h1v1h-1zM13 10h1v1h-1zM14 10h1v1h-1zM15 10h1v1h-1zM21 10h1v1h-1zM23 10h1v1h-1zM24 10h1v1h-1zM25 10h1v1h-1zM26 10h1v1h-1zM27 10h1v1h-1zM30 10h1v1h-1zM2 11h1v1h-1zM7 11h1v1h-1zM9 11h1v1h-1zM10 11h1v1h-1zM13 11h1v1h-1zM15 11h1v1h-1zM16 11h1v1h-1zM18 11h1v1h-1zM20 11h1v1h-1zM22 11h1v1h-1zM23 11h1v1h-1zM24 11h1v1h-1zM26 11h1v1h-1zM27 11h1v1h-1zM29 11h1v1h-1zM30 11h1v1h-1zM3 12h1v1h-1zM6 12h1v1h-1zM7 12h1v1h-1zM8 12h1v1h-1zM10 12h1v1h-1zM12 12h1v1h-1zM18 12h1v1h-1zM19 12h1v1h-1zM22 12h1v1h-1zM23 12h1v1h-1zM25 12h1v1h-1zM26 12h1v1h-1zM27 12h1v1h-1zM30 12h1v1h-1zM2 13h1v1h-1zM3 13h1v1h-1zM5 13h1v1h-1zM6 13h1v1h-1zM10 13h1v1h-1zM11 13h1v1h-1zM14 13h1v1h-1zM16 13h1v1h-1zM19 13h1v1h-1zM20 13h1v1h-1zM23 13h1v1h-1zM25 13h1v1h-1zM27 13h1v1h-1zM2 14h1v1h-1zM4 14h1v1h-1zM6 14h1v1h-1zM8 14h1v1h-1zM9 14h1v1h-1zM13 14h1v1h-1zM14 14h1v1h-1zM15 14h1v1h-1zM16 14h1v1h-1zM17 14h1v1h-1zM18 14h1v1h-1zM20 14h1v1h-1zM21 14h1v1h-1zM23 14h1v1h-1zM25 14h1v1h-1zM27 14h1v1h-1zM29 14h1v1h-1zM30 14h1v1h-1zM4 15h1v1h-1zM5 15h1v1h-1zM7 15h1v1h-1zM9 15h1v1h-1zM10 15h1v1h-1zM11 15h1v1h-1zM12 15h1v1h-1zM14 15h1v1h-1zM19 15h1v1h-1zM22 15h1v1h-1zM25 15h1v1h-1zM26 15h1v1h-1zM30 15h1v1h-1zM3 16h1v1h-1zM8 16h1v1h-1zM9 16h1v1h-1zM10 16h1v1h-1zM13 16h1v1h-1zM14 16h1v1h-1zM15 16h1v1h-1zM16 16h1v1h-1zM17 16h1v1h-1zM20 16h1v1h-1zM24 16h1v1h-1zM27 16h1v1h-1zM28 16h1v1h-1zM30 16h1v1h-1zM3 17h1v1h-1zM4 17h1v1h-1zM5 17h1v1h-1zM6 17h1v1h-1zM14 17h1v1h-1zM15 17h1v1h-1zM17 17h1v1h-1zM18 17h1v1h-1zM21 17h1v1h-1zM23 17h1v1h-1zM29 17h1v1h-1zM2 18h1v1h-1zM3 18h1v1h-1zM5 18h1v1h-1zM7 18h1v1h-1zM8 18h1v1h-1zM9 18h1v1h-1zM10 18h1v1h-1zM12 18h1v1h-1zM13 18h1v1h-1zM14 18h1v1h-1zM15 18h1v1h-1zM21 18h1v1h-1zM23 18h1v1h-1zM2 19h1v1h-1zM3 19h1v1h-1zM4 19h1v1h-1zM5 19h1v1h-1zM7 19h1v1h-1zM9 19h1v1h-1zM13 19h1v1h-1zM14 19h1v1h-1zM15 19h1v1h-1zM16 19h1v1h-1zM18 19h1v1h-1zM20 19h1v1h-1zM22 19h1v1h-1zM23 19h1v1h-1zM25 19h1v1h-1zM26 19h1v1h-1zM27 19h1v1h-1zM29 19h1v1h-1zM30 19h1v1h-1zM4 20h1v1h-1zM5 20h1v1h-1zM8 20h1v1h-1zM10 20h1v1h-1zM11 20h1v1h-1zM12 20h1v1h-1zM18 20h1v1h-1zM19 20h1v1h-1zM23 20h1v1h-1zM24 20h1v1h-1zM25 20h1v1h-1zM26 20h1v1h-1zM28 20h1v1h-1zM30 20h1v1h-1zM10 21h1v1h-1zM11 21h1v1h-1zM12 21h1v1h-1zM13 21h1v1h-1zM14 21h1v1h-1zM16 21h1v1h-1zM19 21h1v1h-1zM20 21h1v1h-1zM23 21h1v1h-1zM25 21h1v1h-1zM27 21h1v1h-1zM29 21h1v1h-1zM2 22h1v1h-1zM3 22h1v1h-1zM7 22h1v1h-1zM8 22h1v1h-1zM9 22h1v1h-1zM11 22h1v1h-1zM15 22h1v1h-1zM16 22h1v1h-1zM17 22h1v1h-1zM18 22h1v1h-1zM20 22h1v1h-1zM22 22h1v1h-1zM23 22h1v1h-1zM24 22h1v1h-1zM25 22h1v1h-1zM26 22h1v1h-1zM27 22h1v1h-1zM29 22h1v1h-1zM10 23h1v1h-1zM12 23h1v1h-1zM13 23h1v1h-1zM14 23h1v1h-1zM19 23h1v1h-1zM22 23h1v1h-1zM26 23h1v1h-1zM30 23h1v1h-1zM2 24h1v1h-1zM3 24h1v1h-1zM4 24h1v1h-1zM5 24h1v1h-1zM6 24h1v1h-1zM7 24h1v1h-1zM8 24h1v1h-1zM10 24h1v1h-1zM11 24h1v1h-1zM13 24h1v1h-1zM15 24h1v1h-1zM16 24h1v1h-1zM17 24h1v1h-1zM20 24h1v1h-1zM21 24h1v1h-1zM22 24h1v1h-1zM24 24h1v1h-1zM26 24h1v1h-1zM27 24h1v1h-1zM30 24h1v1h-1zM2 25h1v1h-1zM8 25h1v1h-1zM11 25h1v1h-1zM13 25h1v1h-1zM15 25h1v1h-1zM17 25h1v1h-1zM18 25h1v1h-1zM22 25h1v1h-1zM26 25h1v1h-1zM27 25h1v1h-1zM30 25h1v1h-1zM2 26h1v1h-1zM4 26h1v1h-1zM5 26h1v1h-1zM6 26h1v1h-1zM8 26h1v1h-1zM10 26h1v1h-1zM11 26h1v1h-1zM12 26h1v1h-1zM13 26h1v1h-1zM15 26h1v1h-1zM21 26h1v1h-1zM22 26h1v1h-1zM23 26h1v1h-1zM24 26h1v1h-1zM25 26h1v1h-1zM26 26h1v1h-1zM27 26h1v1h-1zM29 26h1v1h-1zM2 27h1v1h-1zM4 27h1v1h-1zM5 27h1v1h-1zM6 27h1v1h-1zM8 27h1v1h-1zM12 27h1v1h-1zM14 27h1v1h-1zM16 27h1v1h-1zM18 27h1v1h-1zM20 27h1v1h-1zM21 27h1v1h-1zM22 27h1v1h-1zM28 27h1v1h-1zM29 27h1v1h-1zM2 28h1v1h-1zM4 28h1v1h-1zM5 28h1v1h-1zM6 28h1v1h-1zM8 28h1v1h-1zM11 28h1v1h-1zM12 28h1v1h-1zM13 28h1v1h-1zM14 28h1v1h-1zM18 28h1v1h-1zM19 28h1v1h-1zM21 28h1v1h-1zM23 28h1v1h-1zM27 28h1v1h-1zM29 28h1v1h-1zM30 28h1v1h-1zM2 29h1v1h-1zM8 29h1v1h-1zM12 29h1v1h-1zM13 29h1v1h-1zM19 29h1v1h-1zM20 29h1v1h-1zM21 29h1v1h-1zM22 29h1v1h-1zM27 29h1v1h-1zM29 29h1v1h-1zM30 29h1v1h-1zM2 30h1v1h-1zM3 30h1v1h-1zM4 30h1v1h-1zM5 30h1v1h-1zM6 30h1v1h-1zM7 30h1v1h-1zM8 30h1v1h-1zM10 30h1v1h-1zM11 30h1v1h-1zM12 30h1v1h-1zM13 30h1v1h-1zM15 30h1v1h-1zM17 30h1v1h-1zM18 30h1v1h-1zM20 30h1v1h-1zM21 30h1v1h-1zM22 30h1v1h-1zM23 30h1v1h-1zM25 30h1v1h-1zM27 30h1v1h-1zM29 30h1v1h-1z"/></svg>';
-function drawQR(){ const el=document.getElementById("qr"); if(el) el.innerHTML = QR_SVG; }
+function drawQR(){ const el=document.getElementById("qr"); if(el && CARD) el.innerHTML = FroyoQR.svg("froyo:member:"+CARD.member_no, "QR code for member "+CARD.member_no); }
 function selectCode(){ const r=document.createRange(); r.selectNodeContents($("#refcode")); const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); toast("Code selected. Copy it from here"); }
 function confetti(){
   if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -514,11 +650,32 @@ function confetti(){
 function logoSrc(){ const l=document.querySelector(".brand .logo"); return l?l.src:""; }
 function openSignin(screen){ S.returnTab = S.tab; S.view="signin"; S.auth.screen=screen||"welcome"; S.auth.err=""; S.acctOpen=false; render(); window.scrollTo(0,0); }
 function nameFromEmail(e){ const w=(e.split("@")[0]||"").split(/[._\-+0-9]+/).filter(Boolean)[0]||"there"; return w.charAt(0).toUpperCase()+w.slice(1).toLowerCase(); }
-function signInCustomer(name, email){
-  S.user={name, email, member:ME}; MEMBERS[ME].name=name;
-  if(!S.name) S.name=name; if(!S.email) S.email=email;
-  S.view="app"; S.tab = (S.returnTab==="ops") ? "book" : S.returnTab;
-  if (S.pendingBonus){ addStamps(ME, BOOKING_BONUS, "bonus", "Booking bonus · "+S.pendingBonus); S.pendingBonus=null; setTimeout(()=>toast("+"+BOOKING_BONUS+" bonus stamps added to your card"),50); }
+async function afterSignIn(){
+  const sess = await Neon.session();
+  if (!sess || !sess.user){ S.user=null; return false; }
+  const u = sess.user;
+  S.user = {id:u.id, email:u.email, name: (u.name && u.name.trim()) || nameFromEmail(u.email), staff:false};
+  try { const c = await Neon.rpc("my_card", {}, true); S.user.staff = !!c.staff; if (!S.user.staff) CARD = c; } catch(e){}
+  if (!S.name) S.name = S.user.name; if (!S.email) S.email = S.user.email;
+  S.mineLoaded=false; S.opsLoaded=false;
+  return true;
+}
+async function signOut(){
+  await Neon.signOut();
+  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup="";
+  S.acctOpen=false; toast("Signed out"); render();
+}
+async function sendCode(email, isResend){
+  S.auth.busy = true; S.auth.err=""; render();
+  try { await Neon.sendCode(email); S.auth.screen="code"; S.auth.resendAt = Date.now()+30000; if (isResend) toast("New code sent to "+email); }
+  catch(e){ S.auth.err = e.message; }
+  S.auth.busy = false; render();
+  const f = $(S.auth.screen==="code" ? "#si-code" : "#si-email"); f && f.focus();
+}
+function enterApp(){
+  S.view="app"; S.auth.err=""; S.auth.note="";
+  if (S.finishBooking){ S.tab="book"; S.step=4; }
+  else S.tab = S.user && S.user.staff ? "ops" : (S.returnTab==="ops" ? "book" : S.returnTab);
   render(); window.scrollTo(0,0);
 }
 function renderAcct(){
@@ -527,34 +684,30 @@ function renderAcct(){
   if (!S.user){ b.className="acct"; b.textContent="Sign in"; b.setAttribute("aria-label","Sign in"); m.hidden=true; return; }
   b.className="acct on"; b.textContent=S.user.name.charAt(0).toUpperCase(); b.setAttribute("aria-label","Account: "+S.user.name); b.setAttribute("aria-expanded", S.acctOpen);
   m.hidden=!S.acctOpen;
-  if (S.acctOpen) m.innerHTML = '<div class="who"><b>'+esc(S.user.name)+(S.user.staff?' · Staff':'')+'</b><small>'+esc(S.user.email)+'</small>'+(S.user.staff?'':'<small style="display:block" class="mono">Member '+ME+'</small>')+'</div>'
+  if (S.acctOpen) m.innerHTML = '<div class="who"><b>'+esc(S.user.name)+(S.user.staff?' · Staff':'')+'</b><small>'+esc(S.user.email)+'</small>'+(S.user.staff||!CARD?'':'<small style="display:block" class="mono">Member '+esc(CARD.member_no)+'</small>')+'</div>'
     + (S.user.staff ? '<button class="btn ghost small" data-act="goto" data-tab="ops">Operator</button>' : '<button class="btn ghost small" data-act="goto" data-tab="rewards">My stamp card</button><button class="btn ghost small" data-act="goto" data-tab="mine">My bookings</button>')
     + '<button class="btn small" data-act="signout">Sign out</button>';
 }
 function renderSignin(){
-  const A=S.auth, err = A.err ? '<span class="err">'+A.err+'</span>' : '';
+  const A=S.auth, err = A.err ? '<span class="err" role="alert">'+esc(A.err)+'</span>' : '';
+  const dis = A.busy ? ' disabled' : '';
   let h='<section class="signin">';
   if (A.screen==="welcome"){
-    h += '<div class="si-hero"><img class="si-logo" src="'+logoSrc()+'" alt=""><h1>Welcome to Froyo on the go</h1><p>Sign in to collect stamps on every cup, keep your bookings in one place and get an alert when the trailer is near you.</p></div>';
-    h += '<button class="btn big sso dark" data-act="sso" data-p="Apple">Continue with Apple</button>';
-    h += '<button class="btn big sso outline" data-act="sso" data-p="Google">Continue with Google</button>';
-    h += '<div class="or">or</div>';
-    h += '<form data-form="email" novalidate><div class="field"><label for="si-email">Email</label><input id="si-email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" value="'+esc(A.email)+'"'+(A.err?' aria-invalid="true"':'')+'></div>'+err+'<button class="btn big" type="submit">Email me a sign-in code</button></form>';
+    h += '<div class="si-hero"><img class="si-logo" src="'+logoSrc()+'" alt=""><h1>Welcome to Froyo on the go</h1><p>Sign in to collect stamps on every cup and keep your bookings in one place.</p></div>';
+    if (A.note) h += '<p class="note" style="margin:0">'+esc(A.note)+'</p>';
+    h += '<form data-form="email" novalidate><div class="field"><label for="si-email">Email</label><input id="si-email" type="email" autocomplete="email" inputmode="email" maxlength="254" placeholder="you@example.com" value="'+esc(A.email)+'"'+(A.err?' aria-invalid="true"':'')+'></div>'+err+'<button class="btn big" type="submit"'+dis+'>'+(A.busy?"Sending…":"Email me a sign-in code")+'</button></form>';
     h += '<button class="linkbtn center" data-act="guest">Continue as guest</button>';
     h += '<p class="si-small">No password needed. New here? Signing in creates your account.</p>';
-    h += '<p class="note" style="margin:0">This is a prototype. Nothing you type is sent anywhere or saved, and any code or password works. Please don’t use a real password.</p>';
-    h += '<div class="si-foot"><button class="linkbtn" data-act="staff-screen">Staff sign in</button><span class="demo-pill">Prototype</span></div>';
+    h += '<div class="si-foot"><button class="linkbtn" data-act="staff-screen">Staff sign in</button></div>';
   } else if (A.screen==="code"){
     h += '<button class="linkbtn" data-act="change-email" style="align-self:flex-start">‹ Back</button>';
-    h += '<div class="si-head"><img class="si-logo sm" src="'+logoSrc()+'" alt=""><h2>Check your email</h2><p>We sent a 6-digit code to <strong>'+esc(A.email)+'</strong>. It expires in 10 minutes.</p></div>';
-    h += '<form data-form="code" novalidate><div class="field"><label for="si-code">Sign-in code</label><input id="si-code" class="codein mono" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"'+(A.err?' aria-invalid="true"':'')+'></div>'+err+'<button class="btn big" type="submit">Sign in</button></form>';
+    h += '<div class="si-head"><img class="si-logo sm" src="'+logoSrc()+'" alt=""><h2>Check your email</h2><p>We sent a 6-digit code to <strong>'+esc(A.email)+'</strong>. It may take a minute, and could be in your junk folder.</p></div>';
+    h += '<form data-form="code" novalidate><div class="field"><label for="si-code">Sign-in code</label><input id="si-code" class="codein mono" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"'+(A.err?' aria-invalid="true"':'')+'></div>'+err+'<button class="btn big" type="submit"'+dis+'>'+(A.busy?"Checking…":"Sign in")+'</button></form>';
     h += '<div class="row-links"><button class="linkbtn" data-act="resend">Resend code</button><button class="linkbtn" data-act="change-email">Use a different email</button></div>';
-    h += '<p class="note">Prototype: any 6 digits will sign you in.</p>';
   } else {
     h += '<button class="linkbtn" data-act="change-email" style="align-self:flex-start">‹ Customer sign in</button>';
     h += '<div class="si-head"><img class="si-logo sm" src="'+logoSrc()+'" alt=""><div class="eyebrow" style="margin-top:10px">Staff only</div><h2>Staff sign in</h2><p>For the team running the cart, the trailer and bookings.</p></div>';
-    h += '<form data-form="staff" novalidate><div class="field"><label for="st-email">Work email</label><input id="st-email" type="email" autocomplete="username" value="'+esc(A.staffEmail||"")+'"></div><div class="field"><label for="st-pass">Password</label><input id="st-pass" type="password" autocomplete="current-password"></div>'+err+'<button class="btn big" type="submit">Sign in</button></form>';
-    h += '<p class="note">Prototype: any email and password sign you in as staff. In the live app each team member has their own login, so bookings and stamps are logged against them.</p>';
+    h += '<form data-form="staff" novalidate><div class="field"><label for="st-email">Work email</label><input id="st-email" type="email" autocomplete="username" maxlength="254" value="'+esc(A.staffEmail||"")+'"></div><div class="field"><label for="st-pass">Password</label><input id="st-pass" type="password" autocomplete="current-password" maxlength="128"></div>'+err+'<button class="btn big" type="submit"'+dis+'>'+(A.busy?"Signing in…":"Sign in")+'</button></form>';
   }
   return h+'</section>';
 }
@@ -566,12 +719,48 @@ function renderRewardsLocked(){
 function renderStaffLocked(){
   return '<section><div class="panel empty"><div class="eyebrow">Staff only</div><h2 style="font-size:24px;margin:6px 0">Operator</h2><p>Sign in with your staff account to manage bookings, share the trailer’s location and use the stamp till.</p><button class="btn" data-act="signin-staff">Staff sign in</button></div></section>';
 }
-document.addEventListener("submit", e=>{
+document.addEventListener("submit", async e=>{
   const f=e.target.dataset.form; if(!f) return; e.preventDefault();
-  if (f==="email"){ const v=$("#si-email").value.trim(); S.auth.email=v; if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)){ S.auth.err="Enter an email address like name@example.com."; render(); $("#si-email").focus(); return; } S.auth.err=""; S.auth.screen="code"; render(); $("#si-code").focus(); }
-  if (f==="code"){ const v=$("#si-code").value.replace(/\D/g,""); if(v.length!==6){ S.auth.err="Enter the 6-digit code from the email."; render(); $("#si-code").focus(); return; } S.auth.err=""; signInCustomer(nameFromEmail(S.auth.email), S.auth.email); toast("Signed in"); }
-  if (f==="staff"){ const em=$("#st-email").value.trim(), pw=$("#st-pass").value; S.auth.staffEmail=em; if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em) || !pw){ S.auth.err = !pw && /@/.test(em) ? "Enter your password." : "Enter your work email and password."; render(); return; } S.auth.err=""; S.user={staff:true, name:nameFromEmail(em), email:em}; S.view="app"; S.tab="ops"; S.opsView="events"; render(); window.scrollTo(0,0); toast("Signed in as staff"); }
+  if (S.auth.busy) return;
+  const okEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) && v.length <= 254;
+  if (f==="email"){
+    const v=$("#si-email").value.trim().toLowerCase(); S.auth.email=v;
+    if(!okEmail(v)){ S.auth.err="Enter an email address like name@example.com."; render(); $("#si-email").focus(); return; }
+    sendCode(v, false);
+  }
+  if (f==="code"){
+    const v=$("#si-code").value.replace(/\D/g,"");
+    if(v.length!==6){ S.auth.err="Enter the 6-digit code from the email."; render(); $("#si-code").focus(); return; }
+    S.auth.busy=true; S.auth.err=""; render();
+    try { await Neon.verifyCode(S.auth.email, v); await afterSignIn(); S.auth.busy=false; toast("Signed in"); enterApp(); }
+    catch(err){ S.auth.busy=false; S.auth.err=err.message; render(); $("#si-code").focus(); }
+  }
+  if (f==="staff"){
+    const em=$("#st-email").value.trim().toLowerCase(), pw=$("#st-pass").value; S.auth.staffEmail=em;
+    if(!okEmail(em) || !pw){ S.auth.err = !pw && /@/.test(em) ? "Enter your password." : "Enter your work email and password."; render(); return; }
+    S.auth.busy=true; S.auth.err=""; render();
+    try {
+      await Neon.passwordSignIn(em, pw);
+      await afterSignIn();
+      if (!S.user || !S.user.staff){ await Neon.signOut(); S.user=null; CARD=null; throw new Error("This account doesn’t have staff access."); }
+      S.auth.busy=false; S.opsView="events"; toast("Signed in as staff"); enterApp();
+    } catch(err){ S.auth.busy=false; S.auth.err=err.message; render(); }
+  }
 });
 
-render();
+// ---------- start up ----------
+async function boot(){
+  render();
+  Neon.rpc("get_catalogue").then(c=>{
+    (c.packages||[]).forEach(p=>{ const l=PACKAGES.find(x=>x.id===p.id); if(l){ l.cups=p.cups; l.price=p.price/100; l.desc = "Up to "+p.cups+" cups"+l.desc.replace(/^Up to \d+ cups/,""); } });
+    (c.addons||[]).forEach(a=>{ const l=ADDONS.find(x=>x.id===a.id); if(l){ l.price=a.price/100; } });
+    if (S.view==="app") render();
+  }).catch(()=>{});
+  loadTrailer();
+  const signedIn = await afterSignIn().catch(()=>false);
+  S.view = signedIn ? "app" : "signin";
+  if (signedIn && S.user.staff) S.tab = "ops";
+  render();
+}
+boot();
 })();

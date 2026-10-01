@@ -1,31 +1,40 @@
-# Froyo on the go app (prototype)
+# Froyo on the go app
 
-A clickable prototype of the Froyo on the go app for customers and staff:
+The Froyo on the go web app for customers and staff, live at https://imark950-afk.github.io/Froyo/
 
-- **Book**: book the indoor cart or the mobile trailer, pick a date, choose a package and pay a 25% deposit (simulated).
-- **Find us**: see where the trailer is serving now and this week's public stops.
-- **Rewards**: a digital stamp card (buy 9, the 10th is free) with a QR code to scan at the cart or trailer.
+- **Book**: book the indoor cart or the mobile trailer. Availability is live, and a booking holds the date until the 25% deposit is paid.
+- **Find us**: where the trailer is serving now and this week's public stops.
+- **Rewards**: a digital stamp card (buy 9, the 10th is free) with the customer's own QR code.
 - **Bookings**: a customer's own bookings.
-- **Operator** (staff only): bookings, trailer location sharing and the stamp till.
+- **Operator** (staff only): bookings, deposits, trailer location sharing and the stamp till.
 
-## This is a prototype
+## How it works
 
-Nothing is saved or sent anywhere. Sign-ins, bookings, stamps and payments are simulated in the browser and reset when the page is closed. The sample customers, bookings and stops are examples. **Don't enter real passwords or personal details.**
-
-## How it's hosted
-
-Plain HTML, CSS and JavaScript served by GitHub Pages from the `main` branch. There's no build step, no server code, no packages and no secrets in this repository.
-
-| File | What it is |
+| Part | Where it runs |
 | --- | --- |
-| `index.html` | The page, including its security policy |
-| `app.css` | Styles |
-| `app.js` | The app |
-| `icon.png` | App and browser icon |
-| `robots.txt` | Asks search engines not to list the prototype |
+| Website (`index.html`, `app.css`, `app.js`, `qr.js`) | GitHub Pages |
+| Sign-in (email codes for customers, password for staff) | Neon Auth |
+| Bookings, stamp cards, trailer stops | Neon Postgres, London region |
+
+The website talks to Neon through the Neon Data API. It can only call the actions in `db/02_functions.sql`. It can't read or change any table directly.
+
+There's no build step and there are no packages. The database set-up is in `db/` for reference.
+
+## Making someone staff
+
+Staff sign in with an email and password. To give someone staff access:
+
+1. They sign up once with their work email (any customer sign-in works).
+2. In the Neon console, open the **SQL Editor** for the Froyo project and run the `INSERT INTO app.staff` statement at the bottom of `db/03_grants.sql` with their email.
+
+## Not built yet
+
+- **Taking deposits online.** Bookings are saved as "Deposit due". Staff send a payment link and mark the deposit as paid in the Operator tab. Stripe Checkout needs a small server function to hold the secret key.
+- **Adding trailer stops from the app.** For now they're added in the Neon console (Tables → `app.trailer_stops`).
+- **Apple Wallet and Google Wallet passes, and nearby alerts.**
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for what's in place and the repository settings to keep switched on.
+See [SECURITY.md](SECURITY.md).
 
 © Froyo on the go. All rights reserved.

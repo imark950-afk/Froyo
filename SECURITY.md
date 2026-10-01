@@ -2,27 +2,43 @@
 
 ## Reporting a problem
 
-If you find a security issue, please don't open a public issue. Use **Security → Report a vulnerability** on this repository so it's reported privately.
+Please don't open a public issue. Use **Security → Report a vulnerability** on this repository so it's reported privately.
 
-## What the site does to protect visitors
+## How customer data is protected
 
-- **Strict Content Security Policy.** The page may only run its own script (`app.js`). No inline scripts, no third-party scripts, no plugins, and `connect-src 'none'` means the page cannot send data anywhere. The only outside requests are the Google Fonts stylesheet and font files.
-- **Nothing is collected.** Forms are handled in the browser and never submitted. There are no cookies, no analytics and no browser storage.
-- **User input is escaped** before it's shown on the page, to prevent script injection.
-- **HTTPS only**, with insecure requests upgraded.
-- **No clickjacking.** The page refuses to run inside another site's frame.
-- **Referrer policy** limits what other sites learn when visitors follow a link.
-- **Not indexed** by search engines (`robots.txt` and `noindex`).
-- **No dependencies** to go out of date. The QR code is generated ahead of time and the logo is built in.
+**In the database (Neon, London region)**
+- Customer data lives in a private schema that the Data API never exposes. The website can only call a short list of checked actions (`db/02_functions.sql`).
+- Every action checks who is calling. Customers can only see their own bookings and stamp card. Staff actions check the `app.staff` list, which only the database owner can change.
+- Row-level security is switched on for every table, with no policies, so even a mistaken grant wouldn't expose data.
+- Every action runs with a fixed, empty `search_path`, so nothing can be hijacked by another schema.
+- Prices, totals and deposits are worked out by the database, never trusted from the browser.
+- Limits stop abuse: up to 5 bookings a day per customer, up to 3 bookings awaiting a deposit, one booking per time slot (enforced by the database), up to 6 stamps per order and 18 per customer per day.
+- Booking bonus stamps are only added when staff mark the deposit as paid.
+- Every stamp and free cup records which staff member gave it and when.
+- The Data API only accepts requests from https://imark950-afk.github.io, returns at most 200 rows, and has its public schema listing switched off.
 
-## Repository settings to keep on
+**Sign-in (Neon Auth)**
+- Customers sign in with a one-time code sent by email. There's no customer password to leak.
+- The sign-in session is a secure, HttpOnly cookie that the page's code can't read.
+- The short-lived database pass (15 minutes) is kept in memory only, never saved on the device.
+- Sign-in is only allowed back to the trusted website address.
 
-- **Two-factor authentication** on every GitHub account with access.
-- **Settings → Pages:** source `main` / root, and **Enforce HTTPS** ticked.
-- **Settings → Code security:** Secret scanning, Push protection, Dependabot alerts and Private vulnerability reporting switched on.
-- **Settings → Branches:** a rule for `main` that blocks force pushes and deletion.
-- Only give write access to people who need it.
+**On the website**
+- A strict Content Security Policy lets the page run only its own code and connect only to the two Neon addresses.
+- No third-party scripts, no analytics, no cookies of its own, no browser storage.
+- Everything shown on screen is escaped, to prevent script injection.
+- The page refuses to run inside another site's frame, and isn't listed by search engines.
 
-## Before real customer data is added
+## Settings the owner should keep on
 
-When bookings, sign-ins and payments become real, they must go through a proper backend (for example Supabase with row-level security, in a UK or EU region) and a payment provider such as Stripe. Never put API secret keys, service-role keys or customer data in this repository. Only public "anon" keys belong in front-end code, protected by database access rules.
+**GitHub**
+- Two-factor authentication on every account with access.
+- Repository rules for `main`: block force pushes and deletion.
+- Secret scanning, push protection and private vulnerability reporting switched on.
+- Pages: **Enforce HTTPS** ticked.
+
+**Neon console**
+- Two-factor authentication on the Neon account.
+- **Auth → Allow localhost: off** for production.
+- **Auth → Email:** use your own email sender (custom SMTP) instead of Neon's shared one before launch.
+- Never share the database connection string. It isn't needed by the website and must never be put in this repository.
