@@ -6,7 +6,7 @@ The Froyo on the go web app for customers and staff, live at https://app.froyoon
 - **Find us**: where the trailer is serving now and this week's public stops.
 - **Rewards**: a digital stamp card (buy 9, the 10th is free) with the customer's own QR code.
 - **Bookings**: a customer's own bookings.
-- **Operator** (staff only): bookings, deposits, trailer location sharing, the stamp till and team roles.
+- **Operator** (staff only): bookings, deposits, trailer location sharing, booking availability, the stamp till and team roles.
 
 ## How it works
 
@@ -28,6 +28,7 @@ There's no build step and there are no packages. The database set-up is in `db/`
 | Operator tab: bookings list, stamp till | | ✓ | ✓ | ✓ |
 | Mark deposits paid, confirm bookings | | | ✓ | ✓ |
 | Trailer: set where it's serving now, add/edit/delete stops | | | ✓ | ✓ |
+| Availability: block start times between dates (cart, trailer or both) | | | ✓ | ✓ |
 | Add and remove operators | | | ✓ | ✓ |
 | Make store admins and administrators | | | | ✓ |
 

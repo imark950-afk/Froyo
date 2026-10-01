@@ -162,6 +162,9 @@ BEGIN
   d := (p->>'date')::date;
   IF d < current_date + 7 THEN RAISE EXCEPTION 'Bookings need at least 7 days notice' USING ERRCODE = '22023'; END IF;
   IF d > current_date + 730 THEN RAISE EXCEPTION 'That date is too far ahead' USING ERRCODE = '22023'; END IF;
+  IF app.is_blocked(p->>'unit', d, p->>'time') THEN   -- defined in 08_booking_blocks.sql
+    RAISE EXCEPTION 'Sorry, that time isn’t available. Please pick another.' USING ERRCODE = '23505';
+  END IF;
   SELECT * INTO pk FROM app.packages WHERE id = p->>'pkg';
   IF NOT FOUND THEN RAISE EXCEPTION 'Unknown package' USING ERRCODE = '22023'; END IF;
   IF guests IS NULL OR guests > pk.cups THEN RAISE EXCEPTION 'That package serves up to % guests', pk.cups USING ERRCODE = '22023'; END IF;

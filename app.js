@@ -70,7 +70,7 @@ const S = {
   venue:"", postcode:"", name:"", email:"", phone:"", notes:"",
   mine:[], mineLoaded:false, ops:[], opsLoaded:false, opsFilter:"all", opsView:"events", showErr:false, busy:false,
   trailer:{live:false, now_id:null, stops:[]},
-  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"book", acctOpen:false, finishBooking:false, team:null, teamConfirm:null, stops:null, stopEdit:null, stopConfirm:null, here:null, hereOpen:false
+  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"book", acctOpen:false, finishBooking:false, team:null, teamConfirm:null, stops:null, stopEdit:null, stopConfirm:null, here:null, hereOpen:false, blocks:null, blkEdit:null, blkConfirm:null
 };
 // first bookable month
 (function(){ const d = addDays(MIN_NOTICE); S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1); })();
@@ -389,11 +389,12 @@ async function loadOps(){
   if (S.tab==="ops") render();
 }
 function renderOps(){
-  if ((S.opsView==="team" || S.opsView==="trailer") && !isManager()) S.opsView = "events";
-  const seg = '<div class="seg" role="group" aria-label="Operator views"><button data-act="opsview" data-v="events" aria-pressed="'+(S.opsView==="events")+'">Events</button><button data-act="opsview" data-v="till" aria-pressed="'+(S.opsView==="till")+'">Stamp till</button>'+(isManager()?'<button data-act="opsview" data-v="trailer" aria-pressed="'+(S.opsView==="trailer")+'">Trailer</button>':'')+(isManager()?'<button data-act="opsview" data-v="team" aria-pressed="'+(S.opsView==="team")+'">Team</button>':'')+'</div>';
+  if ((S.opsView==="team" || S.opsView==="trailer" || S.opsView==="blocks") && !isManager()) S.opsView = "events";
+  const seg = '<div class="seg" role="group" aria-label="Operator views"><button data-act="opsview" data-v="events" aria-pressed="'+(S.opsView==="events")+'">Events</button><button data-act="opsview" data-v="till" aria-pressed="'+(S.opsView==="till")+'">Stamp till</button>'+(isManager()?'<button data-act="opsview" data-v="trailer" aria-pressed="'+(S.opsView==="trailer")+'">Trailer</button><button data-act="opsview" data-v="blocks" aria-pressed="'+(S.opsView==="blocks")+'">Availability</button>':'')+(isManager()?'<button data-act="opsview" data-v="team" aria-pressed="'+(S.opsView==="team")+'">Team</button>':'')+'</div>';
   if (S.opsView==="till") return '<section>'+seg+renderTill()+'</section>';
   if (S.opsView==="team") return '<section>'+seg+renderTeam()+'</section>';
   if (S.opsView==="trailer") return '<section>'+seg+renderTrailerAdmin()+'</section>';
+  if (S.opsView==="blocks") return '<section>'+seg+renderBlocks()+'</section>';
   const list = S.ops.slice().sort((a,b)=>a.date-b.date);
   const f = S.opsFilter;
   const shown = list.filter(b=>f==="all"||b.status===f);
@@ -454,7 +455,13 @@ document.addEventListener("click", e=>{
   }
   if (a==="restart"){ Object.assign(S,{finishBooking:false,step:0,event:null,unit:null,date:null,time:null,pkg:null,pkgTouched:false,extraHours:0,addons:new Set(),venue:"",notes:""}); }
   if (a==="filter"){ S.opsFilter=t.dataset.f; }
-  if (a==="opsview"){ S.opsView=t.dataset.v; if (S.opsView==="team") loadTeam(); if (S.opsView==="trailer") loadStops(); }
+  if (a==="opsview"){ S.opsView=t.dataset.v; if (S.opsView==="team") loadTeam(); if (S.opsView==="trailer") loadStops(); if (S.opsView==="blocks") loadBlocks(); }
+  if (a==="blk-new"){ const d=key(addDays(MIN_NOTICE)); S.blkEdit={from:d, to:d, unit:"both", times:[], note:""}; render(); return; }
+  if (a==="blk-edit"){ const x=(S.blocks||[]).find(z=>z.id===+t.dataset.id); if(x) S.blkEdit={id:x.id, from:String(x.from).slice(0,10), to:String(x.to).slice(0,10), unit:x.unit, times:[...x.times], note:x.note}; render(); return; }
+  if (a==="blk-cancel"){ S.blkEdit=null; render(); return; }
+  if (a==="blk-del"){ S.blkConfirm=+t.dataset.id; render(); return; }
+  if (a==="blk-del-no"){ S.blkConfirm=null; render(); return; }
+  if (a==="blk-del-yes"){ deleteBlock(+t.dataset.id); return; }
   if (a==="stop-new"){ S.stopEdit = {date: key(new Date()), from:"11:00", to:"14:00", place:"", area:"", postcode:"", private:false}; S.here=null; render(); const f=$("#sf-place"); f&&f.focus(); return; }
   if (a==="stop-edit"){ const x=(S.stops||[]).find(z=>z.id===+t.dataset.id); if(x){ S.stopEdit={id:x.id, date:String(x.date).slice(0,10), from:x.from, to:x.to, place:x.place, area:x.area, postcode:x.pc, private:x.private, lat:x.lat, lng:x.lng}; S.here = x.lat!=null ? {lat:x.lat, lng:x.lng} : null; } render(); return; }
   if (a==="stop-cancel"){ S.stopEdit=null; S.hereOpen=false; S.here=null; S.hereDraft=null; render(); return; }
@@ -480,6 +487,9 @@ document.addEventListener("keydown", e=>{ if(e.key==="Enter" && e.target.id==="l
 document.addEventListener("change", e=>{
   const t=e.target;
   if (t.id==="liveToggle"){ setLive(t.checked, null); return; }
+  if (t.dataset.blktime && S.blkEdit){ const v=t.dataset.blktime, set=new Set(S.blkEdit.times); t.checked?set.add(v):set.delete(v); S.blkEdit.times=SLOTS.filter(x=>set.has(x)); render(); return; }
+  if (t.id==="bf-allday" && S.blkEdit){ if (t.checked) S.blkEdit.times=[]; else S.blkEdit.times=["18:00"]; render(); return; }
+  if (t.id==="bf-unit" && S.blkEdit){ S.blkEdit.unit=t.value; return; }
   if (t.id==="sf-private" && S.stopEdit){ S.stopEdit.private = t.checked; return; }
   if (t.dataset.act==="team-role"){ setRole(t.dataset.email, t.value); return; }
   if (t.dataset.act==="addon"){ t.checked?S.addons.add(t.dataset.id):S.addons.delete(t.dataset.id); renderBar(); }
@@ -488,6 +498,7 @@ document.addEventListener("change", e=>{
 document.addEventListener("input", e=>{
   const t=e.target;
   if (t.id==="guests"){ S.guests=+t.value; S.pkg=null; S.pkgTouched=false; $("#gval").textContent=S.guests; $("#pkgs").innerHTML=pkgList(); renderBar(); return; }
+  if (t.id && t.id.startsWith("bf-") && S.blkEdit){ S.blkEdit[t.id.slice(3)] = t.value; return; }
   if (t.id && t.id.startsWith("hf-")){ S.hereDraft = S.hereDraft || {}; S.hereDraft[t.id.slice(3)] = t.value; return; }
   if (t.id && t.id.startsWith("sf-") && S.stopEdit){ const k = {postcode:"postcode"}[t.id.slice(3)] || t.id.slice(3); S.stopEdit[k] = t.type==="checkbox" ? t.checked : t.value; return; }
   if (t.dataset.f){ S[t.dataset.f]=t.value; if (S.step===3) renderBar(); }
@@ -505,7 +516,7 @@ async function book(){
     delete AV[avKey(S.unit, S.date)];
   } catch(e){
     toast(e.message);
-    if (/just been booked/.test(e.message)){ delete AV[avKey(S.unit, S.date)]; S.time=null; S.step=1; }
+    if (/just been booked|isn’t available/.test(e.message)){ delete AV[avKey(S.unit, S.date)]; S.time=null; S.step=1; }
   }
   S.busy = false; render(); window.scrollTo(0,0);
 }
@@ -635,6 +646,50 @@ function renderRewards(){
     h += '</ul>';
   }
   h += '</div><p class="note">Stamps are added by the team when you pay, so they can’t be collected online. Free cups don’t expire while you visit at least once every 12 months.</p></section>';
+  return h;
+}
+
+async function loadBlocks(){
+  try { S.blocks = await Neon.rpc("staff_blocks", {}, true); } catch(e){ toast(e.message); }
+  if (S.tab==="ops" && S.opsView==="blocks") render();
+}
+async function deleteBlock(id){
+  try { const r = await Neon.rpc("staff_delete_block", {p_id:id}, true); S.blocks = r.blocks; for (const k in AV) delete AV[k]; toast("Restriction removed. Customers can book these times again"); } catch(e){ toast(e.message); }
+  S.blkConfirm=null; render();
+}
+const UNIT_LABEL = {both:"Cart and trailer", cart:"Indoor cart", trailer:"Mobile trailer"};
+function renderBlocks(){
+  if (!S.blocks){ loadBlocks(); return '<div class="panel empty">Loading restrictions…</div>'; }
+  const E = S.blkEdit;
+  let h = '<div class="step-head"><h2>Booking availability</h2><span class="eyebrow">Store admins and administrators</span></div>';
+  h += '<p class="muted" style="margin:0 0 14px">Stop customers booking certain start times between two dates, for holidays, maintenance or busy periods. Customers see those times as unavailable.</p>';
+  if (E){
+    const allDay = !E.times.length;
+    h += '<div class="panel"><form data-form="blk" novalidate><div class="eyebrow" style="margin-bottom:8px">'+(E.id?'Edit restriction':'New restriction')+'</div>'
+       + '<div class="row"><div class="field"><label for="bf-from">From</label><input id="bf-from" type="date" value="'+esc(E.from)+'" style="'+INPUT_STYLE+'"></div><div class="field"><label for="bf-to">To (inclusive)</label><input id="bf-to" type="date" value="'+esc(E.to)+'" style="'+INPUT_STYLE+'"></div></div>'
+       + '<div class="field"><label for="bf-unit">Applies to</label><select id="bf-unit" style="'+INPUT_STYLE+'">'+["both","cart","trailer"].map(u=>'<option value="'+u+'"'+(E.unit===u?' selected':'')+'>'+UNIT_LABEL[u]+'</option>').join("")+'</select></div>'
+       + '<div class="field"><span style="font-weight:700;font-size:13px">Start times</span>'
+       + '<label class="addon" style="border:0;padding:6px 0"><input type="checkbox" id="bf-allday" '+(allDay?'checked':'')+'><span><strong>Whole day</strong><br><small class="muted">Block every start time</small></span></label>'
+       + (allDay ? '' : '<div class="chips">'+SLOTS.map(t=>'<label class="chip" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" data-blktime="'+t+'" '+(E.times.includes(t)?'checked':'')+'> '+t+'</label>').join("")+'</div>')
+       + '</div>'
+       + '<div class="field"><label for="bf-note">Note for staff (optional, customers don’t see it)</label><input id="bf-note" maxlength="120" value="'+esc(E.note||"")+'" placeholder="e.g. Christmas closure"></div>'
+       + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" type="submit">'+(E.id?'Save changes':'Add restriction')+'</button><button type="button" class="btn ghost" data-act="blk-cancel">Cancel</button></div>'
+       + '<p class="hint" style="margin:10px 0 0">Existing bookings in this period aren’t cancelled. You’ll be told if there are any.</p></form></div>';
+  }
+  h += '<div class="panel"><div class="panel-head"><div class="eyebrow">Current and upcoming restrictions</div>'+(E?'':'<button class="btn small" data-act="blk-new">Add restriction</button>')+'</div>';
+  if (!S.blocks.length) h += '<p class="muted" style="margin:6px 0">None. Customers can book any free time from 7 days ahead.</p>';
+  else {
+    h += '<ul class="stops">';
+    S.blocks.forEach(b=>{
+      const f=parseDay(b.from), t2=parseDay(b.to), range = b.from===b.to ? fmtDate(f) : fmtDate(f)+' – '+fmtDate(t2);
+      const actions = S.blkConfirm===b.id
+        ? '<span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" data-act="blk-del-yes" data-id="'+b.id+'">Remove</button><button class="btn ghost small" data-act="blk-del-no">Keep</button></span>'
+        : '<span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost small" data-act="blk-edit" data-id="'+b.id+'">Edit</button><button class="btn ghost small" data-act="blk-del" data-id="'+b.id+'">Remove</button></span>';
+      h += '<li class="stop" style="grid-template-columns:1fr auto"><span><strong>'+esc(range)+'</strong><small>'+UNIT_LABEL[b.unit]+' · '+(b.times.length ? b.times.join(", ") : 'Whole day')+(b.note?' · '+esc(b.note):'')+'</small></span>'+actions+'</li>';
+    });
+    h += '</ul>';
+  }
+  h += '</div>';
   return h;
 }
 
@@ -796,7 +851,7 @@ async function afterSignIn(){
 }
 async function signOut(){
   await Neon.signOut();
-  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup=""; S.team=null; S.teamConfirm=null; S.stops=null; S.stopEdit=null; S.here=null; S.hereOpen=false;
+  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup=""; S.team=null; S.teamConfirm=null; S.stops=null; S.stopEdit=null; S.here=null; S.hereOpen=false; S.blocks=null; S.blkEdit=null;
   S.acctOpen=false; toast("Signed out"); render();
 }
 async function sendCode(email, isResend){
@@ -852,6 +907,14 @@ document.addEventListener("submit", async e=>{
   const f=e.target.dataset.form; if(!f) return; e.preventDefault();
   if (S.auth.busy) return;
   const okEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) && v.length <= 254;
+  if (f==="blk"){
+    const E=S.blkEdit; if(!E) return;
+    const body={from:E.from, to:E.to||E.from, unit:E.unit, times:E.times, note:(E.note||"").trim()}; if (E.id) body.id=E.id;
+    try { const r = await Neon.rpc("staff_save_block", {p: body}, true); S.blocks = r.blocks; S.blkEdit=null; for (const k in AV) delete AV[k];
+          toast(r.existing_bookings ? "Saved. "+r.existing_bookings+" existing booking"+(r.existing_bookings>1?"s fall":" falls")+" in this period and "+(r.existing_bookings>1?"have":"has")+" not been cancelled" : "Saved. Customers can’t book these times"); }
+    catch(err){ toast(err.message); }
+    render(); return;
+  }
   if (f==="stop" || f==="here"){
     const pre = f==="stop" ? "#sf-" : "#hf-", g = id => { const el=$(pre+id); return el ? (el.type==="checkbox" ? el.checked : el.value.trim()) : ""; };
     const body = {place:g("place"), area:g("area"), postcode:g("postcode"), to:g("to"), lat: S.here ? S.here.lat : null, lng: S.here ? S.here.lng : null};
