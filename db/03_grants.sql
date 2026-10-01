@@ -17,7 +17,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA api REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA app REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 NOTIFY pgrst, 'reload schema';
 
--- Data API settings (set in Neon): exposed schema = api only, CORS = https://imark950-afk.github.io only,
+-- Data API settings (set in Neon): exposed schema = api only, CORS = https://app.froyoonthego.com (+ old github.io during the move),
 -- max 200 rows per response, OpenAPI listing disabled, aggregates disabled.
 
 -- To make someone staff (run in the Neon SQL editor after they've signed in once):

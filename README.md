@@ -1,6 +1,6 @@
 # Froyo on the go app
 
-The Froyo on the go web app for customers and staff, live at https://imark950-afk.github.io/Froyo/
+The Froyo on the go web app for customers and staff, live at https://app.froyoonthego.com
 
 - **Book**: book the indoor cart or the mobile trailer. Availability is live, and a booking holds the date until the 25% deposit is paid.
 - **Find us**: where the trailer is serving now and this week's public stops.
