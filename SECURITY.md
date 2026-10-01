@@ -15,7 +15,7 @@ Please don't open a public issue. Use **Security → Report a vulnerability** on
 - Limits stop abuse: up to 5 bookings a day per customer, up to 3 bookings awaiting a deposit, one booking per time slot (enforced by the database), up to 6 stamps per order and 18 per customer per day.
 - Booking bonus stamps are only added when staff mark the deposit as paid.
 - Every stamp and free cup records which staff member gave it and when.
-- The Data API only accepts requests from https://app.froyoonthego.com (and the old GitHub address while the move finishes), returns at most 200 rows, and has its public schema listing switched off.
+- The Data API only accepts requests from https://app.froyoonthego.com, returns at most 200 rows, and has its public schema listing switched off.
 
 **Sign-in (Neon Auth)**
 - Everyone, customers and staff, signs in with a one-time code sent by email. There are no passwords to guess or leak.
