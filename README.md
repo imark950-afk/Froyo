@@ -13,7 +13,7 @@ The Froyo on the go web app for customers and staff, live at https://app.froyoon
 | Part | Where it runs |
 | --- | --- |
 | Website (`index.html`, `app.css`, `app.js`, `qr.js`) | GitHub Pages |
-| Sign-in (a one-time code by email, for customers and staff) | Neon Auth |
+| Sign-in (a one-time code by email, for customers and staff) | Neon Auth, through a relay at auth.froyoonthego.com (`relay/`, a Neon Function in the `froyo-auth-relay` project) |
 | Bookings, stamp cards, trailer stops | Neon Postgres, London region |
 
 The website talks to Neon through the Neon Data API. It can only call the actions in `db/02_functions.sql`. It can't read or change any table directly.

@@ -22,9 +22,10 @@ Please don't open a public issue. Use **Security → Report a vulnerability** on
 - The sign-in session is a secure, HttpOnly cookie that the page's code can't read.
 - The short-lived database pass (15 minutes) is kept in memory only, never saved on the device.
 - Sign-in is only allowed back to the trusted website address.
+- Sign-in runs through a small relay at auth.froyoonthego.com (`relay/index.mjs`, a Neon Function in Frankfurt). This makes the session cookie belong to froyoonthego.com, so Safari keeps people signed in. The relay only accepts calls from the app's address, only forwards the sign-in routes the app uses, limits code requests per visitor, rewrites the cookie to `Secure; HttpOnly; SameSite=Lax` and stores nothing.
 
 **On the website**
-- A strict Content Security Policy lets the page run only its own code and connect only to the two Neon addresses.
+- A strict Content Security Policy lets the page run only its own code and connect only to the sign-in relay and the Neon Data API.
 - No third-party scripts, no analytics, no cookies of its own, no browser storage.
 - Everything shown on screen is escaped, to prevent script injection.
 - The page refuses to run inside another site's frame, and isn't listed by search engines.

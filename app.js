@@ -100,7 +100,7 @@ const cupSvg = (fill) => '<svg width="26" height="26" viewBox="0 0 26 26" aria-h
 // ================= Neon (sign-in + database) =================
 // Only these two addresses are allowed by the page's security policy.
 const CFG = {
-  auth: "https://ep-red-paper-za2pjniz.neonauth.c-2.eu-west-2.aws.neon.tech/neondb/auth",
+  auth: "https://auth.froyoonthego.com",   // relay on our own domain (relay/index.mjs), so Safari keeps people signed in
   api:  "https://ep-red-paper-za2pjniz.apirest.c-2.eu-west-2.aws.neon.tech/neondb/rest/v1"
 };
 function friendlyAuth(j, status){
