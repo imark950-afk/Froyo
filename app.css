@@ -39,7 +39,6 @@ body{background:transparent}
 body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:url(icon.png) center 55%/min(78vw,440px) no-repeat;opacity:var(--wm,.055)}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--wm:.1}}
 :root[data-theme="dark"]{--wm:.1}
-body.no-wm::before{display:none}
 @media print{body::before{display:none}}
 body{font-family:var(--body);color:var(--ink);font-size:15px;line-height:1.5;padding-inline:16px;padding-block:0 96px}
 .app{max-width:480px;margin:0 auto}

@@ -172,7 +172,6 @@ function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; cle
 // ---------- views ----------
 function render(){
   renderAcct();
-  document.body.classList.toggle("no-wm", S.view==="signin" || S.view==="loading");
   const tabsEl = $("#tabs");
   if (S.view==="loading"){ tabsEl.hidden=true; $("#bar").hidden=true; $("#view").innerHTML='<section class="signin"><div class="si-hero"><img class="si-logo" src="'+logoSrc()+'" alt=""><p>Loading…</p></div></section>'; return; }
   if (S.view==="signin"){ tabsEl.hidden=true; $("#bar").hidden=true; const v=$("#view"); v.innerHTML=renderSignin(); v.firstElementChild.classList.add("fade"); return; }
