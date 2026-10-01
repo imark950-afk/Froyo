@@ -155,7 +155,6 @@ const Neon = (function(){
     session: ()=>authCall("/get-session").catch(()=>null),
     sendCode: email=>authCall("/email-otp/send-verification-otp", {email, type:"sign-in"}),
     verifyCode: (email, otp)=>authCall("/sign-in/email-otp", {email, otp}),
-    passwordSignIn: (email, password)=>authCall("/sign-in/email", {email, password}),
     signOut: async ()=>{ jwt=null; jwtExp=0; try{ await authCall("/sign-out", {}); }catch(e){} },
     rpc
   };
@@ -422,9 +421,9 @@ document.addEventListener("click", e=>{
   if (a==="acct"){ if(!S.user){ openSignin(); } else { S.acctOpen=!S.acctOpen; renderAcct(); } return; }
   if (S.acctOpen){ S.acctOpen=false; renderAcct(); }
   if (a==="signin"){ openSignin(); return; }
-  if (a==="signin-staff"){ openSignin("staff"); return; }
+  if (a==="signin-staff"){ openSignin(); S.auth.note="Staff: sign in with your work email. The Operator tab appears once you’re signed in, if your account is on the staff list."; render(); return; }
   if (a==="guest"){ S.view="app"; S.auth.err=""; render(); window.scrollTo(0,0); return; }
-  if (a==="staff-screen"){ S.auth.screen="staff"; S.auth.err=""; render(); return; }
+  if (a==="staff-screen"){ S.auth.screen="welcome"; S.auth.err=""; S.auth.note="Staff: sign in with your work email. The Operator tab appears once you’re signed in, if your account is on the staff list."; render(); const f=$("#si-email"); f&&f.focus(); return; }
   if (a==="change-email"){ S.auth.screen="welcome"; S.auth.err=""; render(); return; }
   if (a==="resend"){ if (Date.now() < S.auth.resendAt){ toast("Please wait a moment before asking for another code"); return; } sendCode(S.auth.email, true); return; }
   if (a==="signout"){ signOut(); return; }
@@ -704,10 +703,6 @@ function renderSignin(){
     h += '<div class="si-head"><img class="si-logo sm" src="'+logoSrc()+'" alt=""><h2>Check your email</h2><p>We sent a 6-digit code to <strong>'+esc(A.email)+'</strong>. It may take a minute, and could be in your junk folder.</p></div>';
     h += '<form data-form="code" novalidate><div class="field"><label for="si-code">Sign-in code</label><input id="si-code" class="codein mono" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"'+(A.err?' aria-invalid="true"':'')+'></div>'+err+'<button class="btn big" type="submit"'+dis+'>'+(A.busy?"Checking…":"Sign in")+'</button></form>';
     h += '<div class="row-links"><button class="linkbtn" data-act="resend">Resend code</button><button class="linkbtn" data-act="change-email">Use a different email</button></div>';
-  } else {
-    h += '<button class="linkbtn" data-act="change-email" style="align-self:flex-start">‹ Customer sign in</button>';
-    h += '<div class="si-head"><img class="si-logo sm" src="'+logoSrc()+'" alt=""><div class="eyebrow" style="margin-top:10px">Staff only</div><h2>Staff sign in</h2><p>For the team running the cart, the trailer and bookings.</p></div>';
-    h += '<form data-form="staff" novalidate><div class="field"><label for="st-email">Work email</label><input id="st-email" type="email" autocomplete="username" maxlength="254" value="'+esc(A.staffEmail||"")+'"></div><div class="field"><label for="st-pass">Password</label><input id="st-pass" type="password" autocomplete="current-password" maxlength="128"></div>'+err+'<button class="btn big" type="submit"'+dis+'>'+(A.busy?"Signing in…":"Sign in")+'</button></form>';
   }
   return h+'</section>';
 }
@@ -717,7 +712,7 @@ function renderRewardsLocked(){
   return '<section><div class="step-head"><h2>Rewards</h2><span class="eyebrow">Buy 9, the 10th is free</span></div><div class="lcard lock-card"><div class="eyebrow" style="color:rgba(255,255,255,.75)">Froyo stamp card</div><h2 style="font-size:26px">Collect a stamp on every cup</h2><div class="stamps" style="width:100%">'+st+'</div><p style="margin:4px 0 6px;opacity:.9">Plus a birthday treat, bonus stamps when you book an event, and double stamps on Tuesdays.</p><button class="btn big" data-act="signin">Sign in to start collecting</button></div></section>';
 }
 function renderStaffLocked(){
-  return '<section><div class="panel empty"><div class="eyebrow">Staff only</div><h2 style="font-size:24px;margin:6px 0">Operator</h2><p>Sign in with your staff account to manage bookings, share the trailer’s location and use the stamp till.</p><button class="btn" data-act="signin-staff">Staff sign in</button></div></section>';
+  return '<section><div class="panel empty"><div class="eyebrow">Staff only</div><h2 style="font-size:24px;margin:6px 0">Operator</h2><p>Sign in with your work email to manage bookings, share the trailer’s location and use the stamp till.</p><button class="btn" data-act="signin-staff">Staff sign in</button></div></section>';
 }
 document.addEventListener("submit", async e=>{
   const f=e.target.dataset.form; if(!f) return; e.preventDefault();
@@ -734,17 +729,6 @@ document.addEventListener("submit", async e=>{
     S.auth.busy=true; S.auth.err=""; render();
     try { await Neon.verifyCode(S.auth.email, v); await afterSignIn(); S.auth.busy=false; toast("Signed in"); enterApp(); }
     catch(err){ S.auth.busy=false; S.auth.err=err.message; render(); $("#si-code").focus(); }
-  }
-  if (f==="staff"){
-    const em=$("#st-email").value.trim().toLowerCase(), pw=$("#st-pass").value; S.auth.staffEmail=em;
-    if(!okEmail(em) || !pw){ S.auth.err = !pw && /@/.test(em) ? "Enter your password." : "Enter your work email and password."; render(); return; }
-    S.auth.busy=true; S.auth.err=""; render();
-    try {
-      await Neon.passwordSignIn(em, pw);
-      await afterSignIn();
-      if (!S.user || !S.user.staff){ await Neon.signOut(); S.user=null; CARD=null; throw new Error("This account doesn’t have staff access."); }
-      S.auth.busy=false; S.opsView="events"; toast("Signed in as staff"); enterApp();
-    } catch(err){ S.auth.busy=false; S.auth.err=err.message; render(); }
   }
 });
 

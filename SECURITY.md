@@ -18,7 +18,7 @@ Please don't open a public issue. Use **Security → Report a vulnerability** on
 - The Data API only accepts requests from https://imark950-afk.github.io, returns at most 200 rows, and has its public schema listing switched off.
 
 **Sign-in (Neon Auth)**
-- Customers sign in with a one-time code sent by email. There's no customer password to leak.
+- Everyone, customers and staff, signs in with a one-time code sent by email. There are no passwords to guess or leak.
 - The sign-in session is a secure, HttpOnly cookie that the page's code can't read.
 - The short-lived database pass (15 minutes) is kept in memory only, never saved on the device.
 - Sign-in is only allowed back to the trusted website address.
@@ -40,5 +40,6 @@ Please don't open a public issue. Use **Security → Report a vulnerability** on
 **Neon console**
 - Two-factor authentication on the Neon account.
 - **Auth → Allow localhost: off** for production.
+- **Auth → Sign-up with email and password: off.** The app only uses emailed codes.
 - **Auth → Email:** use your own email sender (custom SMTP) instead of Neon's shared one before launch.
 - Never share the database connection string. It isn't needed by the website and must never be put in this repository.
