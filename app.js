@@ -37,6 +37,7 @@ const UNITS = [
 const unitName = id => (UNITS.find(u=>u.id===id)||{}).name || "—";
 
 function mapsUrl(q){ return "https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(q); }
+function stopMapsUrl(t){ return (t.lat!=null && t.lng!=null) ? mapsUrl((+t.lat).toFixed(6)+","+(+t.lng).toFixed(6)) : mapsUrl(t.place+" "+(t.pc||"")); }
 function key(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function parseDay(iso){ const [y,m,d]=String(iso).slice(0,10).split("-").map(Number); return new Date(y,m-1,d); }
 
@@ -69,7 +70,7 @@ const S = {
   venue:"", postcode:"", name:"", email:"", phone:"", notes:"",
   mine:[], mineLoaded:false, ops:[], opsLoaded:false, opsFilter:"all", opsView:"events", showErr:false, busy:false,
   trailer:{live:false, now_id:null, stops:[]},
-  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"book", acctOpen:false, finishBooking:false, team:null, teamConfirm:null
+  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"book", acctOpen:false, finishBooking:false, team:null, teamConfirm:null, stops:null, stopEdit:null, stopConfirm:null, here:null, hereOpen:false
 };
 // first bookable month
 (function(){ const d = addDays(MIN_NOTICE); S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1); })();
@@ -365,7 +366,7 @@ function renderFind(){
   else h += '<span class="live-state off"><span class="dot"></span>Not serving right now</span><h2>No public stops this week</h2><span class="muted">Check back soon.</span>';
   h += '</div>';
   if (focus && focus.x) h += mapSvg(focus, !!now) + '<div class="map-cap">Map preview, not to scale. Use Directions for the exact spot.</div>';
-  if (focus) h += '<div class="live-actions"><a class="btn small" href="'+mapsUrl(focus.place+" "+focus.pc)+'" target="_blank" rel="noopener noreferrer">Directions</a></div>';
+  if (focus) h += '<div class="live-actions"><a class="btn small" href="'+stopMapsUrl(focus)+'" target="_blank" rel="noopener noreferrer">Directions</a></div>';
   h += '</div>';
   if (S.trailer.stops.length){
     h += '<div class="panel"><div class="eyebrow">This week’s stops</div><ul class="stops">';
@@ -374,7 +375,7 @@ function renderFind(){
       if (t.day!==lastDay){ h += '<li class="day-label">'+dayName(t.day)+'</li>'; lastDay=t.day; }
       const isNow = now && now.id===t.id;
       if (t.private) h += '<li class="stop private"><span class="when">'+esc(t.from)+'–'+esc(t.to)+'</span><span><strong>Private event</strong><small>Not open to the public</small></span><span></span></li>';
-      else h += '<li class="stop'+(isNow?" now":"")+'"><span class="when">'+esc(t.from)+'–'+esc(t.to)+'</span><span><strong>'+(isNow?"● ":"")+esc(t.place)+'</strong><small>'+esc(t.area)+'</small></span><a href="'+mapsUrl(t.place+" "+t.pc)+'" target="_blank" rel="noopener noreferrer">Map</a></li>';
+      else h += '<li class="stop'+(isNow?" now":"")+'"><span class="when">'+esc(t.from)+'–'+esc(t.to)+'</span><span><strong>'+(isNow?"● ":"")+esc(t.place)+'</strong><small>'+esc(t.area)+'</small></span><a href="'+stopMapsUrl(t)+'" target="_blank" rel="noopener noreferrer">Map</a></li>';
     });
     h += '</ul></div>';
   }
@@ -388,10 +389,11 @@ async function loadOps(){
   if (S.tab==="ops") render();
 }
 function renderOps(){
-  if (S.opsView==="team" && !isManager()) S.opsView = "events";
-  const seg = '<div class="seg" role="group" aria-label="Operator views"><button data-act="opsview" data-v="events" aria-pressed="'+(S.opsView==="events")+'">Events</button><button data-act="opsview" data-v="till" aria-pressed="'+(S.opsView==="till")+'">Stamp till</button>'+(isManager()?'<button data-act="opsview" data-v="team" aria-pressed="'+(S.opsView==="team")+'">Team</button>':'')+'</div>';
+  if ((S.opsView==="team" || S.opsView==="trailer") && !isManager()) S.opsView = "events";
+  const seg = '<div class="seg" role="group" aria-label="Operator views"><button data-act="opsview" data-v="events" aria-pressed="'+(S.opsView==="events")+'">Events</button><button data-act="opsview" data-v="till" aria-pressed="'+(S.opsView==="till")+'">Stamp till</button>'+(isManager()?'<button data-act="opsview" data-v="trailer" aria-pressed="'+(S.opsView==="trailer")+'">Trailer</button>':'')+(isManager()?'<button data-act="opsview" data-v="team" aria-pressed="'+(S.opsView==="team")+'">Team</button>':'')+'</div>';
   if (S.opsView==="till") return '<section>'+seg+renderTill()+'</section>';
   if (S.opsView==="team") return '<section>'+seg+renderTeam()+'</section>';
+  if (S.opsView==="trailer") return '<section>'+seg+renderTrailerAdmin()+'</section>';
   const list = S.ops.slice().sort((a,b)=>a.date-b.date);
   const f = S.opsFilter;
   const shown = list.filter(b=>f==="all"||b.status===f);
@@ -400,9 +402,6 @@ function renderOps(){
   const T = S.trailer, today = T.stops.filter(t=>t.day===0 && !t.private);
   let h = '<section>'+seg+'<div class="step-head"><h2>Upcoming events</h2><span class="eyebrow">Operator view</span></div>';
   h += '<div class="stats"><div class="stat"><small>Events</small><b class="mono">'+list.length+'</b></div><div class="stat"><small>Pipeline</small><b class="mono">'+gbp(pipeline)+'</b></div><div class="stat"><small>Deposits in</small><b class="mono">'+gbp(deposits)+'</b></div></div>';
-  if (isManager()) h += '<div class="panel"><div class="switch"><label for="liveToggle"><strong>Share trailer location</strong><br><small class="muted">'+(T.live?"Customers see where you’re serving now":"Customers see your next stop only")+'</small></label><input type="checkbox" id="liveToggle" '+(T.live?"checked":"")+'></div>'
-    + (today.length ? '<div class="eyebrow" style="margin:12px 0 6px">Serving today at</div><div class="chips">'+today.map(t=>'<button class="chip" data-act="stop" data-i="'+t.id+'" aria-pressed="'+(T.live&&T.now_id===t.id)+'">'+esc(t.from)+' '+esc(t.place)+'</button>').join("")+'</div>' : '<p class="hint" style="margin:10px 0 0">No public stops today.</p>')
-    + '</div>';
   h += '<div class="chips" style="margin-bottom:12px">'+[["all","All"],["pending_deposit","Deposit due"],["deposit_paid","Deposit paid"],["confirmed","Confirmed"]].map(x=>'<button class="chip" data-act="filter" data-f="'+x[0]+'" aria-pressed="'+(f===x[0])+'">'+x[1]+'</button>').join("")+'</div>';
   h += !S.opsLoaded ? '<div class="panel empty">Loading bookings…</div>' : shown.length ? shown.map(b=>bkCard(b,true)).join("") : '<div class="panel empty">Nothing with this status.</div>';
   h += isManager() ? '<p class="note">Marking a deposit as paid adds '+BOOKING_BONUS+' bonus stamps to the customer’s card. Only do it once the money has arrived.</p></section>' : '<p class="note">Store admins and administrators mark deposits as paid and share the trailer’s location.</p></section>';
@@ -455,7 +454,16 @@ document.addEventListener("click", e=>{
   }
   if (a==="restart"){ Object.assign(S,{finishBooking:false,step:0,event:null,unit:null,date:null,time:null,pkg:null,pkgTouched:false,extraHours:0,addons:new Set(),venue:"",notes:""}); }
   if (a==="filter"){ S.opsFilter=t.dataset.f; }
-  if (a==="opsview"){ S.opsView=t.dataset.v; if (S.opsView==="team") loadTeam(); }
+  if (a==="opsview"){ S.opsView=t.dataset.v; if (S.opsView==="team") loadTeam(); if (S.opsView==="trailer") loadStops(); }
+  if (a==="stop-new"){ S.stopEdit = {date: key(new Date()), from:"11:00", to:"14:00", place:"", area:"", postcode:"", private:false}; S.here=null; render(); const f=$("#sf-place"); f&&f.focus(); return; }
+  if (a==="stop-edit"){ const x=(S.stops||[]).find(z=>z.id===+t.dataset.id); if(x){ S.stopEdit={id:x.id, date:String(x.date).slice(0,10), from:x.from, to:x.to, place:x.place, area:x.area, postcode:x.pc, private:x.private, lat:x.lat, lng:x.lng}; S.here = x.lat!=null ? {lat:x.lat, lng:x.lng} : null; } render(); return; }
+  if (a==="stop-cancel"){ S.stopEdit=null; S.hereOpen=false; S.here=null; S.hereDraft=null; render(); return; }
+  if (a==="stop-del"){ S.stopConfirm=+t.dataset.id; render(); return; }
+  if (a==="stop-del-no"){ S.stopConfirm=null; render(); return; }
+  if (a==="stop-del-yes"){ deleteStop(+t.dataset.id); return; }
+  if (a==="here-open"){ S.hereOpen=true; S.stopEdit=null; S.here=null; S.hereDraft={to: hhmmPlus(120)}; render(); const f=$("#hf-place"); f&&f.focus(); return; }
+  if (a==="geo"){ useMyLocation(); return; }
+  if (a==="geo-clear"){ S.here=null; render(); return; }
   if (a==="team-remove"){ S.teamConfirm = t.dataset.email; render(); return; }
   if (a==="team-remove-cancel"){ S.teamConfirm = null; render(); return; }
   if (a==="team-remove-yes"){ setRole(t.dataset.email, "customer"); return; }
@@ -472,6 +480,7 @@ document.addEventListener("keydown", e=>{ if(e.key==="Enter" && e.target.id==="l
 document.addEventListener("change", e=>{
   const t=e.target;
   if (t.id==="liveToggle"){ setLive(t.checked, null); return; }
+  if (t.id==="sf-private" && S.stopEdit){ S.stopEdit.private = t.checked; return; }
   if (t.dataset.act==="team-role"){ setRole(t.dataset.email, t.value); return; }
   if (t.dataset.act==="addon"){ t.checked?S.addons.add(t.dataset.id):S.addons.delete(t.dataset.id); renderBar(); }
   if (t.id==="guests"){ const y=window.scrollY; render(); window.scrollTo(0,y); }
@@ -479,6 +488,8 @@ document.addEventListener("change", e=>{
 document.addEventListener("input", e=>{
   const t=e.target;
   if (t.id==="guests"){ S.guests=+t.value; S.pkg=null; S.pkgTouched=false; $("#gval").textContent=S.guests; $("#pkgs").innerHTML=pkgList(); renderBar(); return; }
+  if (t.id && t.id.startsWith("hf-")){ S.hereDraft = S.hereDraft || {}; S.hereDraft[t.id.slice(3)] = t.value; return; }
+  if (t.id && t.id.startsWith("sf-") && S.stopEdit){ const k = {postcode:"postcode"}[t.id.slice(3)] || t.id.slice(3); S.stopEdit[k] = t.type==="checkbox" ? t.checked : t.value; return; }
   if (t.dataset.f){ S[t.dataset.f]=t.value; if (S.step===3) renderBar(); }
 });
 
@@ -500,7 +511,7 @@ async function book(){
 }
 
 async function setLive(on, stopId){
-  try { S.trailer = await Neon.rpc("staff_set_live", {p_live:on, p_stop_id:stopId}, true);
+  try { S.trailer = await Neon.rpc("staff_set_live", {p_live:on, p_stop_id:stopId}, true); if (S.stops) loadStops();
         toast(on ? "Location is live for customers" : "Location hidden. Customers see the next stop"); }
   catch(e){ toast(e.message); }
   render();
@@ -627,6 +638,79 @@ function renderRewards(){
   return h;
 }
 
+async function loadStops(){
+  try { const r = await Neon.rpc("staff_stops", {}, true); S.stops = r.stops; S.trailer = r.trailer; } catch(e){ toast(e.message); }
+  if (S.tab==="ops" && S.opsView==="trailer") render();
+}
+async function deleteStop(id){
+  try { const r = await Neon.rpc("staff_delete_stop", {p_id:id}, true); S.stops = r.stops; S.trailer = r.trailer; toast("Stop deleted"); } catch(e){ toast(e.message); }
+  S.stopConfirm=null; render();
+}
+function useMyLocation(){
+  if (!navigator.geolocation){ toast("This device can’t share its location"); return; }
+  toast("Finding your location…");
+  navigator.geolocation.getCurrentPosition(
+    pos => { S.here = {lat: Math.round(pos.coords.latitude*1e6)/1e6, lng: Math.round(pos.coords.longitude*1e6)/1e6}; toast("Location added"); render(); },
+    err => { toast(err.code===1 ? "Location access was blocked. Allow it in your browser settings, or enter the postcode instead." : "Couldn’t get your location. Enter the postcode instead."); },
+    {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
+}
+function hhmmPlus(mins){ const d=new Date(Date.now()+mins*60000); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+function geoField(){
+  return S.here ? '<div class="note" style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 12px"><span>📍 Exact location added ('+S.here.lat.toFixed(4)+', '+S.here.lng.toFixed(4)+'). Directions will go to this spot.</span><button type="button" class="linkbtn" data-act="geo-clear">Remove</button></div>'
+                : '<button type="button" class="btn ghost small" data-act="geo" style="margin-bottom:12px">Use my current location</button>';
+}
+const INPUT_STYLE = 'background:var(--surface);color:var(--ink);border:2px solid var(--line);border-radius:14px;padding:11px 13px;font:inherit;width:100%';
+function renderTrailerAdmin(){
+  if (!S.stops) { loadStops(); return '<div class="panel empty">Loading trailer stops…</div>'; }
+  const T = S.trailer, now = trailerNow(), today = S.stops.filter(t=>t.day===0 && !t.private);
+  let h = '<div class="step-head"><h2>Trailer location</h2><span class="eyebrow">Store admins and administrators</span></div>';
+  // right now
+  h += '<div class="panel"><div class="switch"><label for="liveToggle"><strong>'+(now ? 'Serving now at '+esc(now.place) : 'Location not shared')+'</strong><br><small class="muted">'+(now ? 'Customers can see this in Find us, until '+esc(now.to) : 'Customers see your next stop only')+'</small></label><input type="checkbox" id="liveToggle" '+(T.live?"checked":"")+(today.length?'':' disabled')+'></div>';
+  h += today.length ? '<div class="eyebrow" style="margin:12px 0 6px">Serving now at</div><div class="chips">'+today.map(t=>'<button class="chip" data-act="stop" data-i="'+t.id+'" aria-pressed="'+(T.live&&T.now_id===t.id)+'">'+esc(t.from)+' '+esc(t.place)+'</button>').join("")+'</div>' : '<p class="hint" style="margin:10px 0 0">No public stops planned today.</p>';
+  if (!S.hereOpen) h += '<button class="btn ghost small" data-act="here-open" style="margin-top:12px">Serving somewhere else</button>';
+  else {
+    const D = S.hereDraft || {};
+    h += '<form data-form="here" novalidate style="margin-top:14px"><div class="eyebrow" style="margin-bottom:8px">Serving here now</div>'
+       + '<div class="field"><label for="hf-place">Place name</label><input id="hf-place" maxlength="80" value="'+esc(D.place||"")+'" placeholder="e.g. Shalford Park car park"></div>'
+       + '<div class="row"><div class="field"><label for="hf-postcode">Postcode</label><input id="hf-postcode" maxlength="10" value="'+esc(D.postcode||"")+'" placeholder="GU4 8BN"></div><div class="field"><label for="hf-to">Serving until</label><input id="hf-to" type="time" value="'+esc(D.to||hhmmPlus(120))+'" style="'+INPUT_STYLE+'"></div></div>'
+       + '<div class="field"><label for="hf-area">Where to find us (optional)</label><input id="hf-area" maxlength="120" value="'+esc(D.area||"")+'" placeholder="e.g. by the play area"></div>'
+       + geoField()
+       + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" type="submit">Go live here</button><button type="button" class="btn ghost" data-act="stop-cancel">Cancel</button></div></form>';
+  }
+  h += '</div>';
+  // add / edit form
+  const E = S.stopEdit;
+  if (E){
+    h += '<div class="panel"><form data-form="stop" novalidate><div class="eyebrow" style="margin-bottom:8px">'+(E.id?'Edit stop':'Add a stop')+'</div>'
+       + '<div class="row"><div class="field"><label for="sf-date">Date</label><input id="sf-date" type="date" min="'+key(new Date())+'" value="'+esc(E.date)+'" style="'+INPUT_STYLE+'"></div>'
+       + '<div class="field"><label for="sf-from">From</label><input id="sf-from" type="time" value="'+esc(E.from)+'" style="'+INPUT_STYLE+'"></div>'
+       + '<div class="field"><label for="sf-to">To</label><input id="sf-to" type="time" value="'+esc(E.to)+'" style="'+INPUT_STYLE+'"></div></div>'
+       + '<div class="field"><label for="sf-place">Place name</label><input id="sf-place" maxlength="80" value="'+esc(E.place)+'" placeholder="e.g. Market Square"></div>'
+       + '<div class="row"><div class="field"><label for="sf-postcode">Postcode</label><input id="sf-postcode" maxlength="10" value="'+esc(E.postcode||"")+'"></div><div class="field"><label for="sf-area">Where to find us</label><input id="sf-area" maxlength="120" value="'+esc(E.area||"")+'" placeholder="e.g. stall 14"></div></div>'
+       + '<label class="addon" style="border:0;padding:4px 0 12px"><input type="checkbox" id="sf-private" '+(E.private?"checked":"")+'><span><strong>Private event</strong><br><small class="muted">Customers see “Private event” with no place or postcode</small></span></label>'
+       + geoField()
+       + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" type="submit">'+(E.id?'Save changes':'Add stop')+'</button><button type="button" class="btn ghost" data-act="stop-cancel">Cancel</button></div></form></div>';
+  }
+  // list
+  h += '<div class="panel"><div class="panel-head"><div class="eyebrow">Upcoming stops</div>'+(E?'':'<button class="btn small" data-act="stop-new">Add a stop</button>')+'</div>';
+  const list = S.stops.filter(t=>t.day>=0).sort((x,y)=> String(x.date).localeCompare(String(y.date)) || String(x.from).localeCompare(String(y.from)));
+  if (!list.length) h += '<p class="muted" style="margin:6px 0">No stops planned. Add one so customers can find the trailer.</p>';
+  else {
+    h += '<ul class="stops">'; let last=null;
+    list.forEach(t=>{
+      if (t.day!==last){ h += '<li class="day-label">'+(t.day<=6 ? dayName(t.day) : fmtDate(parseDay(t.date)))+'</li>'; last=t.day; }
+      const isNow = T.live && T.now_id===t.id;
+      const actions = S.stopConfirm===t.id
+        ? '<span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn small" data-act="stop-del-yes" data-id="'+t.id+'">Delete</button><button class="btn ghost small" data-act="stop-del-no">Keep</button></span>'
+        : '<span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost small" data-act="stop-edit" data-id="'+t.id+'">Edit</button><button class="btn ghost small" data-act="stop-del" data-id="'+t.id+'">Delete</button></span>';
+      h += '<li class="stop'+(isNow?' now':'')+'" style="grid-template-columns:88px 1fr auto"><span class="when">'+esc(t.from)+'–'+esc(t.to)+'</span><span><strong>'+(isNow?'● ':'')+esc(t.place)+(t.private?' <span class="sample-tag">Private</span>':'')+'</strong><small>'+esc([t.area, t.pc].filter(Boolean).join(' · '))+(t.lat!=null?' · 📍':'')+'</small></span>'+actions+'</li>';
+    });
+    h += '</ul>';
+  }
+  h += '</div><p class="note">Customers see stops for the next 7 days in Find us. Private events show as “Private event” only. Deleting today’s live stop stops sharing the location.</p>';
+  return h;
+}
+
 async function loadTeam(){
   try { S.team = await Neon.rpc("admin_team", {}, true); } catch(e){ toast(e.message); }
   if (S.tab==="ops" && S.opsView==="team") render();
@@ -712,7 +796,7 @@ async function afterSignIn(){
 }
 async function signOut(){
   await Neon.signOut();
-  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup=""; S.team=null; S.teamConfirm=null;
+  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup=""; S.team=null; S.teamConfirm=null; S.stops=null; S.stopEdit=null; S.here=null; S.hereOpen=false;
   S.acctOpen=false; toast("Signed out"); render();
 }
 async function sendCode(email, isResend){
@@ -768,6 +852,19 @@ document.addEventListener("submit", async e=>{
   const f=e.target.dataset.form; if(!f) return; e.preventDefault();
   if (S.auth.busy) return;
   const okEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) && v.length <= 254;
+  if (f==="stop" || f==="here"){
+    const pre = f==="stop" ? "#sf-" : "#hf-", g = id => { const el=$(pre+id); return el ? (el.type==="checkbox" ? el.checked : el.value.trim()) : ""; };
+    const body = {place:g("place"), area:g("area"), postcode:g("postcode"), to:g("to"), lat: S.here ? S.here.lat : null, lng: S.here ? S.here.lng : null};
+    if (body.place.length < 2){ toast("Enter the place name"); $(pre+"place").focus(); return; }
+    try {
+      let r;
+      if (f==="here"){ r = await Neon.rpc("staff_go_live_here", {p: body}, true); toast("Live: customers now see "+body.place); S.hereOpen=false; S.hereDraft=null; }
+      else { Object.assign(body, {date:g("date"), from:g("from"), private:g("private")}); if (S.stopEdit && S.stopEdit.id) body.id = S.stopEdit.id;
+             r = await Neon.rpc("staff_save_stop", {p: body}, true); toast(body.id ? "Stop updated" : "Stop added"); S.stopEdit=null; }
+      S.stops = r.stops; S.trailer = r.trailer; S.here = null;
+    } catch(err){ toast(err.message); }
+    render(); return;
+  }
   if (f==="invite"){
     const em=$("#inv-email").value.trim().toLowerCase(), role=$("#inv-role").value, note=$("#inv-note").value.trim();
     if(!okEmail(em)){ toast("Enter a valid email address"); $("#inv-email").focus(); return; }

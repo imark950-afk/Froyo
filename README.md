@@ -27,7 +27,7 @@ There's no build step and there are no packages. The database set-up is in `db/`
 | Book, own bookings, own stamp card | ✓ | ✓ | ✓ | ✓ |
 | Operator tab: bookings list, stamp till | | ✓ | ✓ | ✓ |
 | Mark deposits paid, confirm bookings | | | ✓ | ✓ |
-| Share the trailer's location | | | ✓ | ✓ |
+| Trailer: set where it's serving now, add/edit/delete stops | | | ✓ | ✓ |
 | Add and remove operators | | | ✓ | ✓ |
 | Make store admins and administrators | | | | ✓ |
 
@@ -38,7 +38,6 @@ The rules are enforced by the database (`db/05_roles.sql`, `db/06_store_admin.sq
 ## Not built yet
 
 - **Taking deposits online.** Bookings are saved as "Deposit due". Staff send a payment link and mark the deposit as paid in the Operator tab. Stripe Checkout needs a small server function to hold the secret key.
-- **Adding trailer stops from the app.** For now they're added in the Neon console (Tables → `app.trailer_stops`).
 - **Apple Wallet and Google Wallet passes, and nearby alerts.**
 
 ## Security
