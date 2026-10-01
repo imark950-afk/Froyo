@@ -35,6 +35,10 @@ Everyone who signs in is a customer. To change someone's role, a store admin or 
 
 The rules are enforced by the database (`db/05_roles.sql`, `db/06_store_admin.sql`), not just hidden in the app.
 
+## Changing the database
+
+After adding or changing a function in `db/`, refresh the Data API so the app can see it: in the Neon console open **Data API → Settings** and click **Save** (or run `neon data-api refresh-schema --database neondb`). Until then the app shows "Could not find the function … in the schema cache".
+
 ## Not built yet
 
 - **Taking deposits online.** Bookings are saved as "Deposit due". Staff send a payment link and mark the deposit as paid in the Operator tab. Stripe Checkout needs a small server function to hold the secret key.
