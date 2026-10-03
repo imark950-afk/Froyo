@@ -51,7 +51,8 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 
 /* header */
 .top{display:flex;align-items:center;justify-content:space-between;padding-block:18px 10px}
-.brand{display:flex;align-items:center;gap:10px}
+.brand{display:flex;align-items:center;gap:10px;color:inherit;text-decoration:none;border-radius:28px;-webkit-tap-highlight-color:transparent}
+.brand:focus-visible{outline:3px solid var(--berry);outline-offset:4px}
 .brand svg{flex:none}
 .brand .logo{width:46px;height:46px;border-radius:50%;flex:none;box-shadow:0 0 0 1px var(--hero-line)}
 .wm{display:flex;align-items:baseline;gap:6px}

@@ -426,6 +426,10 @@ function renderBar(){
 document.addEventListener("click", e=>{
   const t = e.target.closest("[data-act],[data-tab]"); if(!t) return;
   const a = t.dataset.act;
+  if (a==="home"){ e.preventDefault(); if (S.view==="loading") return;
+    S.acctOpen=false; S.view="app"; S.auth.err=""; S.auth.note="";
+    if (S.step===5) Object.assign(S,{finishBooking:false,event:null,unit:null,date:null,time:null,pkg:null,pkgTouched:false,extraHours:0,addons:new Set(),venue:"",notes:""});
+    S.tab="book"; S.step=0; render(); window.scrollTo(0,0); return; }
   if (a==="acct"){ if(!S.user){ openSignin(); } else { S.acctOpen=!S.acctOpen; renderAcct(); } return; }
   if (S.acctOpen){ S.acctOpen=false; renderAcct(); }
   if (a==="signin"){ openSignin(); return; }
