@@ -669,7 +669,7 @@ const UNIT_LABEL = {both:"Cart and trailer", cart:"Indoor cart", trailer:"Mobile
 function renderBlocks(){
   if (!S.blocks){ loadBlocks(); return '<div class="panel empty">Loading restrictions…</div>'; }
   const E = S.blkEdit;
-  let h = '<div class="step-head"><h2>Booking availability</h2><span class="eyebrow">Store admins and administrators</span></div>';
+  let h = '<div class="step-head"><h2>Booking availability</h2></div>';
   h += '<p class="muted" style="margin:0 0 14px">Stop customers booking certain start times between two dates, for holidays, maintenance or busy periods. Customers see those times as unavailable.</p>';
   if (E){
     const allDay = !E.times.length;
