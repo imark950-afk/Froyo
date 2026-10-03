@@ -555,7 +555,7 @@ async function loadCard(){
     let c = await Neon.rpc("my_card", {}, true);
     if (!c.name && S.user){ c = Object.assign(c, await Neon.rpc("update_my_card", {p_name: S.user.name}, true)); }
     const before = CARD;
-    CARD = c;
+    applyCard(c);
     if (before && (c.stamps > before.stamps || c.rewards > before.rewards)){ R.newStamps = c.rewards > before.rewards ? [GOAL] : Array.from({length:c.stamps-before.stamps},(_,i)=>before.stamps+i+1); R.flash = true; if (c.rewards > before.rewards) setTimeout(confetti,80); }
   } catch(e){ toast(e.message); }
   CARD_LOADING = false;
@@ -852,12 +852,45 @@ async function afterSignIn(){
   if (!sess || !sess.user){ S.user=null; return false; }
   const u = sess.user;
   S.user = {id:u.id, email:u.email, name: (u.name && u.name.trim()) || nameFromEmail(u.email), staff:false, role:"customer"};
-  try { const c = await Neon.rpc("my_card", {}, true); S.user.staff = !!c.staff; S.user.role = c.role || "customer"; CARD = c; } catch(e){}
+  // The database can take a few seconds to wake up after a quiet spell, so keep trying
+  // rather than quietly treating staff as customers (which hid the Operator tab).
+  if (!(await refreshRole([0, 700, 1500, 3000]))) roleRetryLater();
   if (!S.name) S.name = S.user.name; if (!S.email) S.email = S.user.email;
   S.mineLoaded=false; S.opsLoaded=false;
   return true;
 }
+// Checks the signed-in person's role (and stamp card). Returns true once it has an answer.
+let ROLE_CHECKED_AT = 0, ROLE_RETRY = null;
+async function refreshRole(delays){
+  for (const d of (delays || [0])){
+    if (d) await new Promise(r=>setTimeout(r, d));
+    if (!S.user) return false;
+    try { applyCard(await Neon.rpc("my_card", {}, true)); return true; }
+    catch(e){ if (e.status===401 || e.status===403) return false; }
+  }
+  return false;
+}
+function applyCard(c){
+  if (!S.user || !c) return;
+  const wasStaff = S.user.staff, wasRole = S.user.role;
+  S.user.staff = !!c.staff; S.user.role = c.role || "customer"; CARD = c; ROLE_CHECKED_AT = Date.now(); S.roleUnknown = false;
+  if (wasStaff !== S.user.staff || wasRole !== S.user.role){ S.opsLoaded=false; S.team=null; S.stops=null; S.blocks=null; if (S.view==="app") render(); }
+}
+function roleRetryLater(){
+  if (!S.user) return;
+  S.roleUnknown = true; toast("Still connecting to your account…");
+  let n = 0; clearInterval(ROLE_RETRY);
+  ROLE_RETRY = setInterval(async ()=>{
+    if (!S.user || ++n > 20){ clearInterval(ROLE_RETRY); if (S.user && S.roleUnknown) toast("Couldn’t load your account. Check your connection and reopen the app."); return; }
+    if (await refreshRole()) clearInterval(ROLE_RETRY);
+  }, 3000);
+}
+// Pick up role changes (e.g. made staff by an admin) when the app comes back into view.
+document.addEventListener("visibilitychange", ()=>{
+  if (document.visibilityState==="visible" && S.user && Date.now() - ROLE_CHECKED_AT > 60000) refreshRole([0, 1500]);
+});
 async function signOut(){
+  clearInterval(ROLE_RETRY);
   await Neon.signOut();
   S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup=""; S.team=null; S.teamConfirm=null; S.stops=null; S.stopEdit=null; S.here=null; S.hereOpen=false; S.blocks=null; S.blkEdit=null;
   S.acctOpen=false; toast("Signed out"); render();
