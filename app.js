@@ -174,6 +174,7 @@ function render(){
   renderAcct();
   const tabsEl = $("#tabs");
   if (S.view==="loading"){ tabsEl.hidden=true; $("#bar").hidden=true; $("#view").innerHTML='<section class="signin"><div class="si-hero"><img class="si-logo" src="'+logoSrc()+'" alt=""><p>Loading…</p></div></section>'; return; }
+  if (S.view==="delete"){ tabsEl.hidden=true; $("#bar").hidden=true; $("#view").innerHTML=renderDelete(); return; }
   if (S.view==="signin"){ tabsEl.hidden=true; $("#bar").hidden=true; const v=$("#view"); v.innerHTML=renderSignin(); v.firstElementChild.classList.add("fade"); return; }
   tabsEl.hidden=false;
   const isStaff = !!(S.user && S.user.staff);
@@ -438,6 +439,9 @@ document.addEventListener("click", e=>{
   if (a==="change-email"){ S.auth.screen="welcome"; S.auth.err=""; render(); return; }
   if (a==="resend"){ if (Date.now() < S.auth.resendAt){ toast("Please wait a moment before asking for another code"); return; } sendCode(S.auth.email, true); return; }
   if (a==="signout"){ signOut(); return; }
+  if (a==="del-open"){ if(!S.user) return; S.acctOpen=false; S.del={ok:false, busy:false, err:""}; S.view="delete"; render(); window.scrollTo(0,0); return; }
+  if (a==="del-cancel"){ S.del=null; S.view="app"; render(); return; }
+  if (a==="del-go"){ deleteAccount(); return; }
   if (!a && t.dataset.tab){ S.tab = t.dataset.tab; render(); return; }
   if (a==="goto"){ S.tab=t.dataset.tab; render(); window.scrollTo(0,0); return; }
   if (a==="event"){ S.event=t.dataset.id; if(!S.unit && (S.event==="festival"||S.event==="school")) S.unit="trailer"; }
@@ -490,6 +494,7 @@ document.addEventListener("keydown", e=>{ if(e.key==="Enter" && e.target.id==="l
 document.addEventListener("change", e=>{
   const t=e.target;
   if (t.id==="liveToggle"){ setLive(t.checked, null); return; }
+  if (t.id==="del-ok" && S.del){ S.del.ok=t.checked; render(); return; }
   if (t.dataset.blktime && S.blkEdit){ const v=t.dataset.blktime, set=new Set(S.blkEdit.times); t.checked?set.add(v):set.delete(v); S.blkEdit.times=SLOTS.filter(x=>set.has(x)); render(); return; }
   if (t.id==="bf-allday" && S.blkEdit){ if (t.checked) S.blkEdit.times=[]; else S.blkEdit.times=["18:00"]; render(); return; }
   if (t.id==="bf-unit" && S.blkEdit){ S.blkEdit.unit=t.value; return; }
@@ -878,7 +883,32 @@ function renderAcct(){
   m.hidden=!S.acctOpen;
   if (S.acctOpen) m.innerHTML = '<div class="who"><b>'+esc(S.user.name)+(S.user.staff?' · '+ROLE_NAME[S.user.role]:'')+'</b><small>'+esc(S.user.email)+'</small>'+(!CARD?'':'<small style="display:block" class="mono">Member '+esc(CARD.member_no)+'</small>')+'</div>'
     + (S.user.staff ? '<button class="btn ghost small" data-act="goto" data-tab="ops">Operator</button>' : '') + ('<button class="btn ghost small" data-act="goto" data-tab="rewards">My stamp card</button><button class="btn ghost small" data-act="goto" data-tab="mine">My bookings</button>')
-    + '<button class="btn small" data-act="signout">Sign out</button>';
+    + '<button class="btn small" data-act="signout">Sign out</button>'
+    + '<div class="acct-links"><a class="linkbtn" href="privacy.html">Privacy policy</a><button class="linkbtn danger" data-act="del-open">Delete account</button></div>';
+}
+function renderDelete(){
+  const D=S.del||{}, staff = S.user && S.user.staff;
+  return '<section class="signin fade"><div class="panel" style="text-align:left">'
+    + '<div class="eyebrow">Account</div><h2 style="font-size:26px;margin:6px 0 10px">Delete your account</h2>'
+    + '<p style="margin:0 0 10px">This permanently deletes the account for <strong>'+esc(S.user.email)+'</strong>. It can’t be undone.</p>'
+    + '<ul class="del-list"><li><strong>Deleted:</strong> your sign-in, your stamp card'+(CARD&&CARD.stamps?' (including '+CARD.stamps+' stamp'+(CARD.stamps>1?'s':'')+')':'')+', any free cups you haven’t used yet, and your stamp history.</li>'
+    + '<li><strong>Upcoming bookings</strong> still go ahead. We keep the contact details on them so we can run your event. Email us if you want to cancel one.</li>'
+    + '<li><strong>Past bookings:</strong> we keep the booking reference, date and amounts for our accounts, with your name and contact details removed.</li>'
+    + (staff?'<li><strong>Staff access</strong> is removed too.</li>':'')+'</ul>'
+    + '<label class="addon" style="margin:14px 0"><input type="checkbox" id="del-ok" '+(D.ok?'checked':'')+'><span>I understand my account and stamp card will be deleted for good</span></label>'
+    + (D.err?'<p class="err" role="alert" style="margin:0 0 10px">'+esc(D.err)+'</p>':'')
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn danger" data-act="del-go" '+(D.ok&&!D.busy?'':'disabled')+'>'+(D.busy?'Deleting…':'Delete my account')+'</button><button class="btn ghost" data-act="del-cancel">Keep my account</button></div>'
+    + '</div></section>';
+}
+async function deleteAccount(){
+  const D=S.del; if(!D || !D.ok || D.busy) return;
+  D.busy=true; D.err=""; render();
+  try { await Neon.rpc("delete_my_account", {p_confirm:"DELETE"}, true); }
+  catch(e){ D.busy=false; D.err=e.message; render(); return; }
+  await Neon.signOut();
+  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; S.team=null; S.stops=null; S.blocks=null; S.blkEdit=null;
+  S.del=null; S.view="app"; S.tab="find"; render(); window.scrollTo(0,0);
+  toast("Your account has been deleted");
 }
 function renderSignin(){
   const A=S.auth, err = A.err ? '<span class="err" role="alert">'+esc(A.err)+'</span>' : '';
@@ -968,3 +998,6 @@ async function boot(){
 }
 boot();
 })();
+
+// Installable app: register the offline helper (sw.js) once the page has loaded.
+if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) window.addEventListener("load", ()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); });

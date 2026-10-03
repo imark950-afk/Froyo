@@ -7,6 +7,9 @@ The Froyo on the go web app for customers and staff, live at https://app.froyoon
 - **Rewards**: a digital stamp card (buy 9, the 10th is free) with the customer's own QR code.
 - **Bookings**: a customer's own bookings.
 - **Operator** (staff only): bookings, deposits, trailer location sharing, booking availability, the stamp till and team roles.
+- **Account**: anyone signed in can delete their own account from the account menu (`db/09_delete_account.sql`). Upcoming bookings are kept for the event; past bookings are anonymised.
+- **Privacy policy**: `privacy.html`, at https://app.froyoonthego.com/privacy.html (needed for the App Store and Google Play).
+- **Installable**: `manifest.webmanifest`, icons and `sw.js` (an offline helper that only caches the app's own files) let people add the app to their home screen.
 
 ## How it works
 
@@ -41,6 +44,8 @@ The rules are enforced by the database (`db/05_roles.sql`, `db/06_store_admin.sq
 After adding or changing a function in `db/`, refresh the Data API so the app can see it: in the Neon console open **Data API → Settings** and click **Save** (or run `neon data-api refresh-schema --database neondb`). Until then the app shows "Could not find the function … in the schema cache".
 
 ## Not built yet
+
+- **High-resolution icons.** The app icons are enlarged from the 240px logo; replace `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` and `apple-touch-icon.png` once a larger logo is available.
 
 - **Taking deposits online.** Bookings are saved as "Deposit due". Staff send a payment link and mark the deposit as paid in the Operator tab. Stripe Checkout needs a small server function to hold the secret key.
 - **Apple Wallet and Google Wallet passes, and nearby alerts.**
