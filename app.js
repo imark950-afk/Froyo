@@ -154,7 +154,9 @@ const Neon = (function(){
     const text = await r.text(); let j=null; try{ j = text ? JSON.parse(text) : null; }catch(e){}
     if (!r.ok){
       const e = new Error(j && j.message && r.status < 500 && !/^(permission denied|JWT|function )/i.test(j.message) ? j.message : (r.status===401||r.status===403 ? "Please sign in again." : "Something went wrong. Please try again."));
-      e.status = r.status; throw e;
+      e.status = r.status;
+      if (j && j.message === "COMING_SOON"){ e.message = "The app isn’t open yet."; e.comingSoon = true; setTimeout(()=>showSoon(), 0); }
+      throw e;
     }
     return j;
   }
@@ -174,6 +176,7 @@ function render(){
   renderAcct();
   const tabsEl = $("#tabs");
   if (S.view==="loading"){ tabsEl.hidden=true; $("#bar").hidden=true; $("#view").innerHTML='<section class="signin"><div class="si-hero"><img class="si-logo" src="'+logoSrc()+'" alt=""><p>Loading…</p></div></section>'; return; }
+  if (S.view==="soon"){ tabsEl.hidden=true; $("#bar").hidden=true; $("#view").innerHTML=renderSoon(); return; }
   if (S.view==="delete"){ tabsEl.hidden=true; $("#bar").hidden=true; $("#view").innerHTML=renderDelete(); return; }
   if (S.view==="signin"){ tabsEl.hidden=true; $("#bar").hidden=true; const v=$("#view"); v.innerHTML=renderSignin(); v.firstElementChild.classList.add("fade"); return; }
   tabsEl.hidden=false;
@@ -428,13 +431,14 @@ document.addEventListener("click", e=>{
   const t = e.target.closest("[data-act],[data-tab]"); if(!t) return;
   const a = t.dataset.act;
   if (a==="home"){ e.preventDefault(); if (S.view==="loading") return;
+    if (S.site && S.site.prelaunch && !S.site.access){ S.view="soon"; S.acctOpen=false; render(); return; }
     S.acctOpen=false; S.view="app"; S.auth.err=""; S.auth.note="";
     S.tab="find"; render(); window.scrollTo(0,0); return; }
   if (a==="acct"){ if(!S.user){ openSignin(); } else { S.acctOpen=!S.acctOpen; renderAcct(); } return; }
   if (S.acctOpen){ S.acctOpen=false; renderAcct(); }
   if (a==="signin"){ openSignin(); return; }
   if (a==="signin-staff"){ openSignin(); S.auth.note="Staff: sign in with your work email. The Operator tab appears once you’re signed in, if your account is on the staff list."; render(); return; }
-  if (a==="guest"){ S.view="app"; S.auth.err=""; render(); window.scrollTo(0,0); return; }
+  if (a==="guest"){ S.auth.err=""; if (S.site && S.site.prelaunch && !S.site.access){ S.view="soon"; render(); return; } S.view="app"; render(); window.scrollTo(0,0); return; }
   if (a==="staff-screen"){ S.auth.screen="welcome"; S.auth.err=""; S.auth.note="Staff: sign in with your work email. The Operator tab appears once you’re signed in, if your account is on the staff list."; render(); const f=$("#si-email"); f&&f.focus(); return; }
   if (a==="change-email"){ S.auth.screen="welcome"; S.auth.err=""; render(); return; }
   if (a==="resend"){ if (Date.now() < S.auth.resendAt){ toast("Please wait a moment before asking for another code"); return; } sendCode(S.auth.email, true); return; }
@@ -442,6 +446,10 @@ document.addEventListener("click", e=>{
   if (a==="del-open"){ if(!S.user) return; S.acctOpen=false; S.del={ok:false, busy:false, err:""}; S.view="delete"; render(); window.scrollTo(0,0); return; }
   if (a==="del-cancel"){ S.del=null; S.view="app"; render(); return; }
   if (a==="del-go"){ deleteAccount(); return; }
+  if (a==="pre-ask"){ S.preConfirm=true; render(); return; }
+  if (a==="pre-no"){ S.preConfirm=false; render(); return; }
+  if (a==="pre-yes"){ const on = !S.pre.prelaunch; preCall("admin_set_prelaunch", {p_on:on}, on ? "Coming soon lock is on" : "The app is now open to everyone"); return; }
+  if (a==="tester-del"){ preCall("admin_remove_tester", {p_email:t.dataset.email}, "Removed from early access"); return; }
   if (!a && t.dataset.tab){ S.tab = t.dataset.tab; render(); return; }
   if (a==="goto"){ S.tab=t.dataset.tab; render(); window.scrollTo(0,0); return; }
   if (a==="event"){ S.event=t.dataset.id; if(!S.unit && (S.event==="festival"||S.event==="school")) S.unit="trailer"; }
@@ -775,7 +783,7 @@ function renderTrailerAdmin(){
 }
 
 async function loadTeam(){
-  try { S.team = await Neon.rpc("admin_team", {}, true); } catch(e){ toast(e.message); }
+  try { const r = await Promise.all([Neon.rpc("admin_team", {}, true), Neon.rpc("admin_prelaunch", {}, true)]); S.team = r[0]; S.pre = r[1]; } catch(e){ toast(e.message); }
   if (S.tab==="ops" && S.opsView==="team") render();
 }
 async function setRole(email, role){
@@ -802,6 +810,7 @@ function renderTeam(){
     return '<li class="stop" style="grid-template-columns:1fr auto"><span><strong>'+label+'</strong><small>'+esc(p.email)+(p.note?' · '+esc(p.note):'')+(invite?' · invited, not signed in yet':'')+'</small></span>'+right+'</li>';
   };
   let h = '<div class="step-head"><h2>Team</h2><span class="eyebrow">You’re '+(ROLE_NAME[mine]||"").toLowerCase()+'</span></div>';
+  h += renderEarlyAccess();
   h += '<div class="panel"><div class="eyebrow">Staff</div><ul class="stops">'+(T.members.length ? T.members.map(p=>row(p,false)).join("") : '<li class="muted" style="padding:10px 0">No staff yet.</li>')+'</ul></div>';
   if (T.invites.length) h += '<div class="panel"><div class="eyebrow">Invited</div><ul class="stops">'+T.invites.map(p=>row(p,true)).join("")+'</ul></div>';
   h += '<div class="panel"><div class="eyebrow" style="margin-bottom:8px">Add someone</div><form data-form="invite" novalidate><div class="field"><label for="inv-email">Their email</label><input id="inv-email" type="email" maxlength="254" autocomplete="off" placeholder="name@example.com"></div>'
@@ -811,6 +820,25 @@ function renderTeam(){
   h += '<div class="panel"><div class="eyebrow" style="margin-bottom:6px">What each role can do</div><dl class="kv"><dt>Customer</dt><dd>Book, see their bookings and stamp card.</dd><dt>Operator</dt><dd>Plus: bookings list and stamp till.</dd><dt>Store admin</dt><dd>Plus: mark deposits paid, share the trailer’s location, add and remove operators.</dd><dt>Administrator</dt><dd>Plus: make store admins and administrators.</dd></dl></div>';
   h += '<p class="note">Nobody can change their own role. Removing someone makes them a customer again; their bookings and stamps are kept.</p>';
   return h;
+}
+
+function renderEarlyAccess(){
+  const P = S.pre; if (!P) return '';
+  let h = '<div class="panel"><div class="panel-head"><div class="eyebrow">Early access</div><span class="status '+(P.prelaunch?'st-deposit':'st-confirmed')+'">'+(P.prelaunch?'Coming soon lock on':'Open to everyone')+'</span></div>';
+  h += P.prelaunch
+    ? '<p class="muted" style="margin:6px 0 10px">Only staff and the people below can use the app. Everyone else sees a Coming soon screen.</p>'
+    : '<p class="muted" style="margin:6px 0 10px">The app is open to everyone. The list below only matters if you switch the lock back on.</p>';
+  if (P.can_switch){
+    if (S.preConfirm) h += '<div class="panel" style="background:var(--surface-2);margin:0 0 12px"><p style="margin:0 0 10px"><strong>'+(P.prelaunch?'Open the app to everyone?':'Switch the Coming soon lock back on?')+'</strong> '+(P.prelaunch?'Anyone with the link will be able to book, see the trailer and collect stamps.':'Customers who aren’t on the list will be shut out straight away.')+'</p><span style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn small" data-act="pre-yes">'+(P.prelaunch?'Open the app':'Switch lock on')+'</button><button class="btn ghost small" data-act="pre-no">Cancel</button></span></div>';
+    else h += '<button class="btn ghost small" data-act="pre-ask" style="margin-bottom:12px">'+(P.prelaunch?'Open the app to everyone':'Switch the Coming soon lock on')+'</button>';
+  } else h += '<p class="hint" style="margin:0 0 12px">Only an administrator can open the app to everyone.</p>';
+  h += '<ul class="stops">' + (P.testers.length ? P.testers.map(t=>'<li class="stop" style="grid-template-columns:1fr auto"><span><strong>'+esc(t.email)+'</strong><small>'+(t.note?esc(t.note)+' · ':'')+(t.joined?'Signed up':'Not signed up yet')+'</small></span><button class="btn ghost small" data-act="tester-del" data-email="'+esc(t.email)+'">Remove</button></li>').join('') : '<li class="muted" style="padding:8px 0">Nobody on the list yet. Staff always have access.</li>') + '</ul>';
+  h += '<form data-form="tester" novalidate style="margin-top:12px"><div class="row"><div class="field"><label for="ts-email">Email</label><input id="ts-email" type="email" maxlength="254" autocomplete="off" placeholder="friend@example.com"></div><div class="field"><label for="ts-note">Note (optional)</label><input id="ts-note" maxlength="80" placeholder="e.g. Tester"></div></div><button class="btn small" type="submit">Add to early access</button></form>';
+  return h + '</div>';
+}
+async function preCall(fn, args, msg){
+  try { S.pre = await Neon.rpc(fn, args, true); if (msg) toast(msg); } catch(e){ toast(e.message); }
+  S.preConfirm=false; render();
 }
 
 function renderTill(){
@@ -892,8 +920,8 @@ document.addEventListener("visibilitychange", ()=>{
 async function signOut(){
   clearInterval(ROLE_RETRY);
   await Neon.signOut();
-  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup=""; S.team=null; S.teamConfirm=null; S.stops=null; S.stopEdit=null; S.here=null; S.hereOpen=false; S.blocks=null; S.blkEdit=null;
-  S.acctOpen=false; toast("Signed out"); render();
+  S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; R.lookup=""; S.team=null; S.pre=null; S.preConfirm=false; S.teamConfirm=null; S.stops=null; S.stopEdit=null; S.here=null; S.hereOpen=false; S.blocks=null; S.blkEdit=null;
+  S.acctOpen=false; if (S.site && S.site.prelaunch) S.view="soon"; toast("Signed out"); render();
 }
 async function sendCode(email, isResend){
   S.auth.busy = true; S.auth.err=""; render();
@@ -902,8 +930,10 @@ async function sendCode(email, isResend){
   S.auth.busy = false; render();
   const f = $(S.auth.screen==="code" ? "#si-code" : "#si-email"); f && f.focus();
 }
-function enterApp(){
-  S.view="app"; S.auth.err=""; S.auth.note="";
+async function enterApp(){
+  S.auth.err=""; S.auth.note="";
+  if (!(await gateOK())){ S.view="soon"; render(); window.scrollTo(0,0); return; }
+  S.view="app";
   if (S.finishBooking){ S.tab="book"; S.step=4; }
   else S.tab = S.user && S.user.staff ? "ops" : (S.returnTab==="ops" ? "find" : S.returnTab);
   render(); window.scrollTo(0,0);
@@ -918,6 +948,28 @@ function renderAcct(){
     + (S.user.staff ? '<button class="btn ghost small" data-act="goto" data-tab="ops">Operator</button>' : '') + ('<button class="btn ghost small" data-act="goto" data-tab="rewards">My stamp card</button><button class="btn ghost small" data-act="goto" data-tab="mine">My bookings</button>')
     + '<button class="btn small" data-act="signout">Sign out</button>'
     + '<div class="acct-links"><a class="linkbtn" href="privacy.html">Privacy policy</a><button class="linkbtn danger" data-act="del-open">Delete account</button></div>';
+}
+// ---------- Coming soon lock ----------
+// While the lock is on, only staff and people on the early access list can use the app.
+// The database enforces this; these screens just explain it.
+async function gateOK(){
+  for (const d of [0, 700, 1500, 3000]){
+    if (d) await new Promise(r=>setTimeout(r, d));
+    try { S.site = await Neon.rpc("site_status"); return !S.site.prelaunch || !!S.site.access; } catch(e){}
+  }
+  return S.site ? (!S.site.prelaunch || !!S.site.access) : true;   // can't tell: the database still refuses anything not allowed
+}
+function showSoon(){
+  if (S.view==="soon" || S.view==="signin" || S.view==="loading" || S.view==="delete") return;
+  S.view="soon"; render(); window.scrollTo(0,0);
+}
+function renderSoon(){
+  let h = '<section class="signin fade"><div class="si-hero"><img class="si-logo" src="'+logoSrc()+'" alt=""><h1>Coming soon</h1>'
+    + '<p>We’re putting the finishing touches to the Froyo on the go app. Book the cart or trailer, find the trailer and collect stamps, all in one place.</p>'
+    + '<p class="muted" style="margin-top:6px">Follow <strong>@froyo.onthego</strong> on Instagram, TikTok and Threads to hear when it opens.</p></div>';
+  if (S.user) h += '<div class="panel" style="text-align:left"><p style="margin:0 0 10px">You’re signed in as <strong>'+esc(S.user.email)+'</strong>, which isn’t on the early access list yet.</p><button class="btn ghost" data-act="signout">Sign out</button></div>';
+  else h += '<div class="si-foot"><button class="linkbtn" data-act="signin">Team or early access? Sign in</button></div>';
+  return h + '</section>';
 }
 function renderDelete(){
   const D=S.del||{}, staff = S.user && S.user.staff;
@@ -940,7 +992,7 @@ async function deleteAccount(){
   catch(e){ D.busy=false; D.err=e.message; render(); return; }
   await Neon.signOut();
   S.user=null; CARD=null; S.mine=[]; S.mineLoaded=false; S.ops=[]; S.opsLoaded=false; R.found=null; R.stats=null; S.team=null; S.stops=null; S.blocks=null; S.blkEdit=null;
-  S.del=null; S.view="app"; S.tab="find"; render(); window.scrollTo(0,0);
+  S.del=null; S.view = S.site && S.site.prelaunch ? "soon" : "app"; S.tab="find"; render(); window.scrollTo(0,0);
   toast("Your account has been deleted");
 }
 function renderSignin(){
@@ -994,6 +1046,12 @@ document.addEventListener("submit", async e=>{
     } catch(err){ toast(err.message); }
     render(); return;
   }
+  if (f==="tester"){
+    const em = ($("#ts-email").value||"").trim().toLowerCase(), note = ($("#ts-note").value||"").trim();
+    if (!okEmail(em)){ toast("Enter a valid email address"); $("#ts-email").focus(); return; }
+    await preCall("admin_add_tester", {p_email:em, p_note:note}, em+" can now use the app");
+    return;
+  }
   if (f==="invite"){
     const em=$("#inv-email").value.trim().toLowerCase(), role=$("#inv-role").value, note=$("#inv-note").value.trim();
     if(!okEmail(em)){ toast("Enter a valid email address"); $("#inv-email").focus(); return; }
@@ -1026,6 +1084,7 @@ async function boot(){
   loadTrailer();
   const signedIn = await afterSignIn().catch(()=>false);
   S.view = signedIn ? "app" : "signin";
+  if (!(await gateOK())) S.view = "soon";
   if (signedIn && S.user.staff) S.tab = "ops";
   render();
 }

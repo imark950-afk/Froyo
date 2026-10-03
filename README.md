@@ -9,6 +9,7 @@ The Froyo on the go web app for customers and staff, live at https://app.froyoon
 - **Operator** (staff only): bookings, deposits, trailer location sharing, booking availability, the stamp till and team roles.
 - **Account**: anyone signed in can delete their own account from the account menu (`db/09_delete_account.sql`). Upcoming bookings are kept for the event; past bookings are anonymised.
 - **Privacy policy**: `privacy.html`, at https://app.froyoonthego.com/privacy.html (needed for the App Store and Google Play).
+- **Coming soon lock** (`db/10_prelaunch.sql`): while it's on, only staff and people on the early access list can use the app; everyone else sees a Coming soon screen and the database refuses their requests. Administrators switch it in Operator → Team → Early access; store admins and administrators manage the list.
 - **Installable**: `manifest.webmanifest`, icons and `sw.js` (an offline helper that only caches the app's own files) let people add the app to their home screen.
 
 ## How it works
