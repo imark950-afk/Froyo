@@ -64,13 +64,13 @@ function dayInfo(d, unit){
 
 function addDays(n){ const d=new Date(TODAY); d.setDate(d.getDate()+n); return d; }
 const S = {
-  tab:"book", step:0,
+  tab:"find", step:0,
   event:null, unit:null, date:null, time:null, calMonth:new Date(TODAY.getFullYear(), TODAY.getMonth(), 1),
   guests:80, pkg:null, pkgTouched:false, extraHours:0, addons:new Set(),
   venue:"", postcode:"", name:"", email:"", phone:"", notes:"",
   mine:[], mineLoaded:false, ops:[], opsLoaded:false, opsFilter:"all", opsView:"events", showErr:false, busy:false,
   trailer:{live:false, now_id:null, stops:[]},
-  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"book", acctOpen:false, finishBooking:false, team:null, teamConfirm:null, stops:null, stopEdit:null, stopConfirm:null, here:null, hereOpen:false, blocks:null, blkEdit:null, blkConfirm:null
+  view:"loading", user:null, auth:{screen:"welcome", email:"", err:"", busy:false, resendAt:0}, returnTab:"find", acctOpen:false, finishBooking:false, team:null, teamConfirm:null, stops:null, stopEdit:null, stopConfirm:null, here:null, hereOpen:false, blocks:null, blkEdit:null, blkConfirm:null
 };
 // first bookable month
 (function(){ const d = addDays(MIN_NOTICE); S.calMonth = new Date(d.getFullYear(), d.getMonth(), 1); })();
@@ -178,7 +178,7 @@ function render(){
   tabsEl.hidden=false;
   const isStaff = !!(S.user && S.user.staff);
   $("#tab-ops").hidden = !isStaff;
-  if (S.tab==="ops" && !isStaff) S.tab="book";
+  if (S.tab==="ops" && !isStaff) S.tab="find";
   document.querySelectorAll(".tabs button").forEach(b=>b.setAttribute("aria-selected", b.dataset.tab===S.tab));
   const v = $("#view");
   if (S.tab==="mine" && S.user && !S.mineLoaded) loadMine();
@@ -428,8 +428,7 @@ document.addEventListener("click", e=>{
   const a = t.dataset.act;
   if (a==="home"){ e.preventDefault(); if (S.view==="loading") return;
     S.acctOpen=false; S.view="app"; S.auth.err=""; S.auth.note="";
-    if (S.step===5) Object.assign(S,{finishBooking:false,event:null,unit:null,date:null,time:null,pkg:null,pkgTouched:false,extraHours:0,addons:new Set(),venue:"",notes:""});
-    S.tab="book"; S.step=0; render(); window.scrollTo(0,0); return; }
+    S.tab="find"; render(); window.scrollTo(0,0); return; }
   if (a==="acct"){ if(!S.user){ openSignin(); } else { S.acctOpen=!S.acctOpen; renderAcct(); } return; }
   if (S.acctOpen){ S.acctOpen=false; renderAcct(); }
   if (a==="signin"){ openSignin(); return; }
@@ -868,7 +867,7 @@ async function sendCode(email, isResend){
 function enterApp(){
   S.view="app"; S.auth.err=""; S.auth.note="";
   if (S.finishBooking){ S.tab="book"; S.step=4; }
-  else S.tab = S.user && S.user.staff ? "ops" : (S.returnTab==="ops" ? "book" : S.returnTab);
+  else S.tab = S.user && S.user.staff ? "ops" : (S.returnTab==="ops" ? "find" : S.returnTab);
   render(); window.scrollTo(0,0);
 }
 function renderAcct(){
