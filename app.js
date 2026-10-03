@@ -726,7 +726,7 @@ const INPUT_STYLE = 'background:var(--surface);color:var(--ink);border:2px solid
 function renderTrailerAdmin(){
   if (!S.stops) { loadStops(); return '<div class="panel empty">Loading trailer stops…</div>'; }
   const T = S.trailer, now = trailerNow(), today = S.stops.filter(t=>t.day===0 && !t.private);
-  let h = '<div class="step-head"><h2>Trailer location</h2><span class="eyebrow">Store admins and administrators</span></div>';
+  let h = '<div class="step-head"><h2>Trailer location</h2></div>';
   // right now
   h += '<div class="panel"><div class="switch"><label for="liveToggle"><strong>'+(now ? 'Serving now at '+esc(now.place) : 'Location not shared')+'</strong><br><small class="muted">'+(now ? 'Customers can see this in Find us, until '+esc(now.to) : 'Customers see your next stop only')+'</small></label><input type="checkbox" id="liveToggle" '+(T.live?"checked":"")+(today.length?'':' disabled')+'></div>';
   h += today.length ? '<div class="eyebrow" style="margin:12px 0 6px">Serving now at</div><div class="chips">'+today.map(t=>'<button class="chip" data-act="stop" data-i="'+t.id+'" aria-pressed="'+(T.live&&T.now_id===t.id)+'">'+esc(t.from)+' '+esc(t.place)+'</button>').join("")+'</div>' : '<p class="hint" style="margin:10px 0 0">No public stops planned today.</p>';
